@@ -1,0 +1,8 @@
+[Desktop Entry]
+Name=WhatsApp
+Comment=WhatsApp Web
+Exec=/home/alext/bin/hypr-launch-webapp.sh https://web.whatsapp.com whatsapp
+Icon=chrome-web.whatsapp.com__-Default
+Type=Application
+Categories=Network;Chat;
+StartupWMClass=chrome-web.whatsapp.com__-Default

@@ -1,0 +1,8 @@
+[Desktop Entry]
+Name=ProtonMail
+Comment=ProtonMail
+Exec=/home/alext/bin/hypr-launch-webapp.sh https://mail.proton.me protonmail
+Icon=chrome-mail.proton.me__-Default
+Type=Application
+Categories=Network;Email;
+StartupWMClass=chrome-mail.proton.me__-Default

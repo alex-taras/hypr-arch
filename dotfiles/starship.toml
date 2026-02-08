@@ -1,0 +1,127 @@
+palette = "matugen"
+format = """
+[░▒▓](shadow)\
+$os\
+[](bg:primary fg:shadow)\
+$directory\
+[ ](fg:primary bg:surface_variant)\
+$git_branch\
+$git_status\
+$hg_branch\
+[ ](fg:surface_variant bg:shadow)\
+[▓▒░](shadow)\
+[ ◦•](outline)\
+$fill\
+[•◦ ](outline)\
+[░▒▓](shadow)\
+[ ](fg:surface_variant bg:shadow)\
+$status\
+$cmd_duration\
+[ ](fg:shadow bg:surface_variant)\
+$battery\
+[▓▒░](shadow)
+[·](surface_variant)\
+[·](outline)\
+[•](on_surface_variant)\
+[ ](tertiary)\
+"""
+
+[fill]
+symbol = "·"
+style = "outline"
+
+[directory]
+style = "fg:surface_variant bg:primary"
+format = "[ $path ]($style)"
+truncation_length = 3
+truncation_symbol = "…/"
+
+[directory.substitutions]
+"~" = "  "
+"Applications" = "  "
+"Desktop" = "  "
+"Developer" = "  "
+"Documents" = " 󰈙 "
+"Downloads" = "  "
+"Games" = "  "
+"GitHub" = "  "
+"Library" = "  "
+"Movies" = "  "
+"Music" = "  "
+"Pictures" = "  "
+"Projects" = "  "
+"Public" = "  "
+"Screenshots" = " 󱣴 "
+"Videos" = "  "
+"Thunderbird" = "   "
+"source" = " 󰈹 "
+"comm" = "  "
+
+[git_branch]
+symbol = ""
+style = "bg:surface_variant"
+format = '[[ $symbol $branch ](fg:primary bg:surface_variant)]($style)'
+
+[git_status]
+style = "bg:surface_variant"
+format = '[[($all_status$ahead_behind )](fg:primary bg:surface_variant)]($style)'
+
+[hg_branch]
+disabled = false
+symbol = ""
+style = "bg:surface_variant"
+format = '[[ $symbol $branch ](fg:primary bg:surface_variant)]($style)'
+
+[cmd_duration]
+disabled = false
+min_time = 0
+show_milliseconds = true
+style = "fg:on_surface bg:surface_variant"
+format = '[$duration]($style)'
+
+[status]
+symbol = '  '
+success_symbol = '  '
+not_executable_symbol = '  '
+not_found_symbol = '  '
+map_symbol = true
+disabled = false
+style = 'fg:on_surface bg:surface_variant'
+format = '[$symbol]($style)'
+
+[os]
+format = '[ $symbol]($style)'
+style = 'fg:primary bg:shadow'
+disabled = false
+
+[os.symbols]
+Arch = " "
+Debian = " "
+Fedora = " "
+FreeBSD = " "
+Linux = " "
+Macos = " "
+NixOS = "󱄅 "
+Nobara = " "
+Pop = " "
+Raspbian = " "
+Ubuntu = " "
+Unknown = " "
+
+[palettes.matugen]
+error = '#fb4934'
+hover = '#474240'
+on_error = '#282828'
+on_hover = '#fbf1c7'
+on_primary = '#282828'
+on_secondary = '#282828'
+on_surface = '#fbf1c7'
+on_surface_variant = '#ebdbb2'
+on_tertiary = '#282828'
+outline = '#786f6b'
+primary = '#ebdbb2'
+secondary = '#8ec07c'
+shadow = '#282828'
+surface = '#282828'
+surface_variant = '#3c3836'
+tertiary = '#83a598'

@@ -1,0 +1,8 @@
+[Desktop Entry]
+Name=Google Keep
+Comment=Google Keep Notes
+Exec=/home/alext/bin/hypr-launch-webapp.sh https://keep.google.com keep
+Icon=chrome-keep.google.com__-Default
+Type=Application
+Categories=Network;
+StartupWMClass=chrome-keep.google.com__-Default

@@ -1,0 +1,8 @@
+[Desktop Entry]
+Name=Claude
+Comment=Claude AI Assistant
+Exec=/home/alext/bin/hypr-launch-webapp.sh https://claude.ai claude
+Icon=chrome-claude.ai__-Default
+Type=Application
+Categories=Network;
+StartupWMClass=chrome-claude.ai__-Default

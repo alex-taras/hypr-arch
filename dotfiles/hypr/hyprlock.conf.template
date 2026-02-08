@@ -1,0 +1,66 @@
+background {
+    monitor =
+    path = screenshot
+    blur_passes = 4
+    blur_size = 8
+    brightness = 0.7
+}
+
+input-field {
+    monitor =
+    size = 300, 50
+    outline_thickness = 2
+    dots_size = 0.2
+    dots_spacing = 0.2
+    outer_color = {{INPUT_OUTER_COLOR}}
+    inner_color = {{INPUT_INNER_COLOR}}
+    font_color = {{INPUT_FONT_COLOR}}
+    font_family = {{FONT_FAMILY}}
+    position = 0, -100
+    halign = center
+    valign = center
+}
+
+label {
+    monitor =
+    text = $TIME
+    color = {{TIME_COLOR}}
+    font_size = {{FONT_SIZE_XXLARGE}}
+    font_family = {{FONT_FAMILY}}
+    position = 0, 100
+    halign = center
+    valign = center
+}
+
+label {
+    monitor =
+    text = cmd[update:1000] date "+%A, %B %d"
+    color = {{DATE_COLOR}}
+    font_size = {{FONT_SIZE_XLARGE}}
+    font_family = {{FONT_FAMILY}}
+    position = 0, 20
+    halign = center
+    valign = center
+}
+
+label {
+    monitor =
+    text = cmd[update:60000] wttrbar --nerd | jq -r '.text + "°C"'
+    color = {{WEATHER_COLOR}}
+    font_size = {{FONT_SIZE_LARGE}}
+    font_family = {{FONT_FAMILY}}
+    position = 0, -80
+    halign = center
+    valign = top
+}
+
+label {
+    monitor =
+    text = cmd[update:3600000] cat /tmp/wttrbar--wttr.in.json | jq -r '.nearest_area[0].areaName[0].value + ", " + .nearest_area[0].country[0].value'
+    color = {{LOCATION_COLOR}}
+    font_size = 20
+    font_family = {{FONT_FAMILY}}
+    position = 0, -40
+    halign = center
+    valign = top
+}

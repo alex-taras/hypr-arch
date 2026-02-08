@@ -1,0 +1,8 @@
+[Desktop Entry]
+Name=Plex
+Comment=Plex Media Server
+Exec=/home/alext/bin/hypr-launch-webapp.sh http://192.168.1.137:32400/web plex
+Icon=chrome-192.168.1.137__web-Default
+Type=Application
+Categories=AudioVideo;Video;
+StartupWMClass=chrome-192.168.1.137__web-Default
