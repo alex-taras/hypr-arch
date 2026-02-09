@@ -23,7 +23,7 @@ else
     PROFILE_DIR="$HOME/.local/share/webapps/$APP_NAME"
     mkdir -p "$PROFILE_DIR"
     
-    exec chromium-browser \
+    exec chromium \
         --app="$URL" \
         --user-data-dir="$PROFILE_DIR" \
         --class="$APP_NAME" \

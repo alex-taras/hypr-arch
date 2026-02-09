@@ -3,6 +3,6 @@
   "updateTerminalCommand": "kitty -e",
   "currentIconName": "world-download",
   "hideOnZero": true,
-  "customCmdGetNumUpdates": "echo $(( $(dnf check-update -q | grep -v '^$' | grep -v '^Last metadata' | wc -l) + $(flatpak remote-ls --updates --columns=application | wc -l) ))",
-  "customCmdDoSystemUpdate": "sudo nobara-sync cli"
+  "customCmdGetNumUpdates": "echo $(($(checkupdates 2>/dev/null | wc -l) + $(flatpak remote-ls --updates 2>/dev/null | wc -l) + $(noctalia-check.sh --count)))",
+  "customCmdDoSystemUpdate": "/home/alext/bin/sysupdate.sh"
 }

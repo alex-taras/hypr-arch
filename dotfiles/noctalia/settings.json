@@ -8,8 +8,8 @@
         "customLaunchPrefixEnabled": false,
         "enableClipPreview": true,
         "enableClipboardHistory": false,
-        "enableSettingsSearch": true,
-        "enableWindowsSearch": true,
+        "enableSettingsSearch": false,
+        "enableWindowsSearch": false,
         "iconMode": "native",
         "ignoreMouseInput": false,
         "pinnedApps": [
@@ -82,14 +82,15 @@
                             "id": "ActiveWindow",
                             "maxWidth": 145,
                             "scrollingMode": "hover",
-                            "showIcon": true,
+                            "showIcon": false,
+                            "textColor": "none",
                             "useFixedWidth": false
                         }
                     ],
                     "left": [
                         {
                             "clockColor": "none",
-                            "customFont": "CaskaydiaMono Nerd Font",
+                            "customFont": "CaskaydiaCove Nerd Font",
                             "formatHorizontal": "HH:mm ddd, MMM dd",
                             "formatVertical": "HH mm - dd MM",
                             "id": "Clock",
@@ -110,13 +111,6 @@
                     ],
                     "right": [
                         {
-                            "defaultSettings": {
-                                "apiKey": "",
-                                "sonarrUrl": "http://192.168.1.137:8989"
-                            },
-                            "id": "plugin:at-sonarr"
-                        },
-                        {
                             "blacklist": [
                             ],
                             "colorizeIcons": true,
@@ -134,6 +128,28 @@
                             "showTitle": false,
                             "smartWidth": true,
                             "titleWidth": 120
+                        },
+                        {
+                            "defaultSettings": {
+                                "apiKey": "",
+                                "sonarrUrl": "http://192.168.1.137:8989"
+                            },
+                            "id": "plugin:at-sonarr"
+                        },
+                        {
+                            "defaultSettings": {
+                                "autoHeight": true,
+                                "cheatsheetData": [
+                                ],
+                                "columnCount": 3,
+                                "detectedCompositor": "",
+                                "hyprlandConfigPath": "~/.config/hypr/hyprland.conf",
+                                "modKeyVariable": "$mod",
+                                "niriConfigPath": "~/.config/niri/config.kdl",
+                                "windowHeight": 0,
+                                "windowWidth": 1400
+                            },
+                            "id": "plugin:keybind-cheatsheet"
                         },
                         {
                             "id": "WallpaperSelector"
@@ -189,7 +205,7 @@
                 },
                 {
                     "clockColor": "none",
-                    "customFont": "CaskaydiaMono Nerd Font",
+                    "customFont": "CaskaydiaCove Nerd Font",
                     "formatHorizontal": "HH:mm ddd, MMM dd",
                     "formatVertical": "HH mm - dd MM",
                     "id": "Clock",
@@ -364,9 +380,6 @@
         "shortcuts": {
             "left": [
                 {
-                    "id": "plugin:at-updater"
-                },
-                {
                     "id": "Network"
                 },
                 {
@@ -418,7 +431,7 @@
         "onlySameOutput": false,
         "pinnedApps": [
             "kitty",
-            "org.mozilla.firefox"
+            "firefox"
         ],
         "pinnedStatic": true,
         "position": "bottom",
@@ -475,7 +488,7 @@
         "showCalendarEvents": true,
         "showCalendarWeather": true,
         "showWeekNumberInCalendar": false,
-        "use12hourFormat": false,
+        "use12hourFormat": true,
         "useFahrenheit": false,
         "weatherEnabled": true,
         "weatherShowEffects": true
@@ -500,7 +513,7 @@
     "notifications": {
         "backgroundOpacity": 1,
         "criticalUrgencyDuration": 15,
-        "enableBatteryToast": true,
+        "enableBatteryToast": false,
         "enableKeyboardLayoutToast": true,
         "enableMediaToast": false,
         "enabled": true,
@@ -662,9 +675,9 @@
         "bluetoothDetailsViewMode": "grid",
         "bluetoothHideUnnamedDevices": false,
         "boxBorderEnabled": false,
-        "fontDefault": "CaskaydiaMono Nerd Font",
+        "fontDefault": "CaskaydiaCove Nerd Font",
         "fontDefaultScale": 1.25,
-        "fontFixed": "CaskaydiaMono NFM",
+        "fontFixed": "CaskaydiaCove NF",
         "fontFixedScale": 1.25,
         "networkPanelView": "wifi",
         "panelBackgroundOpacity": 0.93,

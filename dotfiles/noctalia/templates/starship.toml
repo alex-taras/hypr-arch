@@ -96,6 +96,7 @@ disabled = false
 
 [os.symbols]
 Arch = " "
+CachyOS = " "
 Debian = " "
 Fedora = " "
 FreeBSD = " "

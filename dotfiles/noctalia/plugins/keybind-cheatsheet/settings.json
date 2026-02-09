@@ -1,0 +1,299 @@
+{
+  "cheatsheetData": [
+    {
+      "title": "Applications",
+      "binds": [
+        {
+          "keys": "Super + RETURN",
+          "desc": "Terminal"
+        },
+        {
+          "keys": "Super + SPACE",
+          "desc": "Launcher"
+        },
+        {
+          "keys": "Super + F",
+          "desc": "Files"
+        },
+        {
+          "keys": "Super + B",
+          "desc": "Browser"
+        },
+        {
+          "keys": "Super + Shift + B",
+          "desc": "Incognito"
+        },
+        {
+          "keys": "Super + M",
+          "desc": "Spotify"
+        },
+        {
+          "keys": "Super + Shift + M",
+          "desc": "Music Player"
+        }
+      ]
+    },
+    {
+      "title": "Webapps",
+      "binds": [
+        {
+          "keys": "Super + A",
+          "desc": "Claude AI"
+        },
+        {
+          "keys": "Super + Shift + W",
+          "desc": "Whatsapp"
+        },
+        {
+          "keys": "Super + E",
+          "desc": "Proton Mail"
+        },
+        {
+          "keys": "Super + V",
+          "desc": "Plex Web"
+        },
+        {
+          "keys": "Super + K",
+          "desc": "Google Keep"
+        }
+      ]
+    },
+    {
+      "title": "Hyprland window management",
+      "binds": [
+        {
+          "keys": "Super + W",
+          "desc": "Close window"
+        },
+        {
+          "keys": "Super + T",
+          "desc": "Window fullscreen"
+        },
+        {
+          "keys": "Super + Shift + T",
+          "desc": "Window floating"
+        },
+        {
+          "keys": "Super + S",
+          "desc": "Horizontal/Vertical Split"
+        }
+      ]
+    },
+    {
+      "title": "System",
+      "binds": [
+        {
+          "keys": "Super + Shift + Q",
+          "desc": "Power menu"
+        },
+        {
+          "keys": "Super + L",
+          "desc": "Lock screen"
+        },
+        {
+          "keys": "Super + H",
+          "desc": "Keybinds Help"
+        }
+      ]
+    },
+    {
+      "title": "Screenshots",
+      "binds": [
+        {
+          "keys": "Super + P",
+          "desc": "Screenshot active workspace"
+        },
+        {
+          "keys": "Super + Shift + P",
+          "desc": "Screenshot selected region"
+        }
+      ]
+    },
+    {
+      "title": "Focus movement",
+      "binds": [
+        {
+          "keys": "Super + LEFT",
+          "desc": "Focus left"
+        },
+        {
+          "keys": "Super + RIGHT",
+          "desc": "Focus right"
+        },
+        {
+          "keys": "Super + UP",
+          "desc": "Focus up"
+        },
+        {
+          "keys": "Super + DOWN",
+          "desc": "Focus down"
+        },
+        {
+          "keys": "Super + TAB",
+          "desc": "Focus next window"
+        }
+      ]
+    },
+    {
+      "title": "Workspaces",
+      "binds": [
+        {
+          "keys": "Super + 1",
+          "desc": "Move to workspace 1"
+        },
+        {
+          "keys": "Super + 2",
+          "desc": "Move to workspace 2"
+        },
+        {
+          "keys": "Super + 3",
+          "desc": "Move to workspace 3"
+        },
+        {
+          "keys": "Super + 4",
+          "desc": "Move to workspace 4"
+        },
+        {
+          "keys": "Super + 5",
+          "desc": "Move to workspace 5"
+        },
+        {
+          "keys": "Super + 6",
+          "desc": "Move to workspace 6"
+        },
+        {
+          "keys": "Super + 7",
+          "desc": "Move to workspace 7"
+        },
+        {
+          "keys": "Super + 8",
+          "desc": "Move to workspace 8"
+        },
+        {
+          "keys": "Super + 9",
+          "desc": "Move to workspace 9"
+        },
+        {
+          "keys": "Super + 0",
+          "desc": "Move to workspace 10"
+        },
+        {
+          "keys": "Super + Shift + 1",
+          "desc": "Move window to workspace 1"
+        },
+        {
+          "keys": "Super + Shift + 2",
+          "desc": "Move window to workspace 2"
+        },
+        {
+          "keys": "Super + Shift + 3",
+          "desc": "Move window to workspace 3"
+        },
+        {
+          "keys": "Super + Shift + 4",
+          "desc": "Move window to workspace 4"
+        },
+        {
+          "keys": "Super + Shift + 5",
+          "desc": "Move window to workspace 5"
+        },
+        {
+          "keys": "Super + Shift + 6",
+          "desc": "Move window to workspace 6"
+        },
+        {
+          "keys": "Super + Shift + 7",
+          "desc": "Move window to workspace 7"
+        },
+        {
+          "keys": "Super + Shift + 8",
+          "desc": "Move window to workspace 8"
+        },
+        {
+          "keys": "Super + Shift + 9",
+          "desc": "Move window to workspace 9"
+        },
+        {
+          "keys": "Super + Shift + 0",
+          "desc": "Move window to workspace 10"
+        }
+      ]
+    },
+    {
+      "title": "Mouse actions",
+      "binds": [
+        {
+          "keys": "Super + Scroll Down",
+          "desc": "Workspace up"
+        },
+        {
+          "keys": "Super + Scroll Up",
+          "desc": "Workspace down"
+        },
+        {
+          "keys": "Super + Left Click",
+          "desc": "Drag window"
+        },
+        {
+          "keys": "Super + Right Click",
+          "desc": "Resize window"
+        }
+      ]
+    },
+    {
+      "title": "Media keys",
+      "binds": [
+        {
+          "keys": "Vol Up",
+          "desc": "Volume UP"
+        },
+        {
+          "keys": "Vol Down",
+          "desc": "Volume DOWN"
+        },
+        {
+          "keys": "Mute",
+          "desc": "Toggle Audio"
+        },
+        {
+          "keys": "Mic Mute",
+          "desc": "Toggle Microphone"
+        },
+        {
+          "keys": "Next",
+          "desc": "Player Next"
+        },
+        {
+          "keys": "Pause",
+          "desc": "Player Pause"
+        },
+        {
+          "keys": "Play",
+          "desc": "Player Play"
+        },
+        {
+          "keys": "Prev",
+          "desc": "Player Previous"
+        },
+        {
+          "keys": "Power",
+          "desc": "Power Menu"
+        },
+        {
+          "keys": "Calc",
+          "desc": "Calculator"
+        },
+        {
+          "keys": "XF86SCREENSAVER",
+          "desc": "Lock Screen"
+        }
+      ]
+    }
+  ],
+  "detectedCompositor": "hyprland",
+  "niriConfigPath": "~/.config/niri/config.kdl",
+  "hyprlandConfigPath": "~/.config/hypr/hyprland.conf",
+  "modKeyVariable": "$mainMod",
+  "windowHeight": 850,
+  "windowWidth": 1400
+}
