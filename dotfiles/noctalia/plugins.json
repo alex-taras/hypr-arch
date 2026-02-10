@@ -12,17 +12,17 @@
         }
     ],
     "states": {
-        "at-sonarr": {
+        "a1d94d:at-sonarr": {
             "enabled": true,
-            "sourceUrl": "https://github.com/noctalia-dev/noctalia-plugins"
+            "sourceUrl": "https://github.com/alex-taras/noctalia-plugins"
         },
-        "at-stonks": {
+        "a1d94d:at-stonks": {
             "enabled": true,
-            "sourceUrl": "https://github.com/noctalia-dev/noctalia-plugins"
+            "sourceUrl": "https://github.com/alex-taras/noctalia-plugins"
         },
-        "at-weather": {
+        "a1d94d:at-weather": {
             "enabled": true,
-            "sourceUrl": "https://github.com/noctalia-dev/noctalia-plugins"
+            "sourceUrl": "https://github.com/alex-taras/noctalia-plugins"
         },
         "keybind-cheatsheet": {
             "enabled": true,
