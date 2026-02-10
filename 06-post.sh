@@ -54,6 +54,14 @@ else
     log "No bin directory found, skipping"
 fi
 
+log "Adding ~/bin to PATH in .zshrc..."
+if ! grep -q 'export PATH="$HOME/bin:$PATH"' ~/.zshrc 2>/dev/null; then
+    echo 'export PATH="$HOME/bin:$PATH"' >> ~/.zshrc
+    log "~/bin added to PATH in .zshrc"
+else
+    log "~/bin already in PATH"
+fi
+
 log "Deploying desktop files and icons..."
 mkdir -p ~/.local/share/applications
 mkdir -p ~/.local/share/icons/hicolor/scalable/apps

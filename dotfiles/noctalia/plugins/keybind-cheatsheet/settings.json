@@ -264,12 +264,8 @@
           "desc": "Player Next"
         },
         {
-          "keys": "Pause",
-          "desc": "Player Pause"
-        },
-        {
           "keys": "Play",
-          "desc": "Player Play"
+          "desc": "Player Play/Pause"
         },
         {
           "keys": "Prev",

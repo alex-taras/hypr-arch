@@ -390,18 +390,52 @@
         "shortcuts": {
             "left": [
                 {
-                    "id": "Network"
+                    "enableOnStateLogic": false,
+                    "generalTooltipText": "Install AUR package",
+                    "icon": "package",
+                    "id": "CustomButton",
+                    "onClicked": "kitty -e pkg-aur-install.sh",
+                    "onMiddleClicked": "",
+                    "onRightClicked": "",
+                    "stateChecksJson": "[]"
                 },
                 {
-                    "id": "Bluetooth"
+                    "enableOnStateLogic": false,
+                    "generalTooltipText": "Install package",
+                    "icon": "packages",
+                    "id": "CustomButton",
+                    "onClicked": "kitty -e pkg-install.sh",
+                    "onMiddleClicked": "",
+                    "onRightClicked": "",
+                    "stateChecksJson": "[]"
                 },
                 {
-                    "id": "WallpaperSelector"
+                    "enableOnStateLogic": false,
+                    "generalTooltipText": "Remove Package",
+                    "icon": "package-off",
+                    "id": "CustomButton",
+                    "onClicked": "kitty -e pkg-remove.sh",
+                    "onMiddleClicked": "",
+                    "onRightClicked": "",
+                    "stateChecksJson": "[]"
+                },
+                {
+                    "enableOnStateLogic": false,
+                    "generalTooltipText": "Flathub",
+                    "icon": "brand-appgallery",
+                    "id": "CustomButton",
+                    "onClicked": "chromium --app=\"https://flathub.org/en\"",
+                    "onMiddleClicked": "",
+                    "onRightClicked": "",
+                    "stateChecksJson": "[]"
                 }
             ],
             "right": [
                 {
-                    "id": "Notifications"
+                    "id": "Network"
+                },
+                {
+                    "id": "Bluetooth"
                 },
                 {
                     "id": "PowerProfile"
@@ -689,7 +723,7 @@
         "fontDefaultScale": 1.25,
         "fontFixed": "CaskaydiaCove NF",
         "fontFixedScale": 1.25,
-        "networkPanelView": "wifi",
+        "networkPanelView": "ethernet",
         "panelBackgroundOpacity": 0.93,
         "panelsAttachedToBar": true,
         "settingsPanelMode": "attached",
