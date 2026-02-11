@@ -1,5 +1,6 @@
 #!/bin/bash
 
+WIDTH=$(( ${COLUMNS:-$(tput cols)} - 2 ))
 NOCTALIA_DIR="$HOME/.config/quickshell/noctalia-shell"
 UPDATE_SERVICE="$NOCTALIA_DIR/Services/Noctalia/UpdateService.qml"
 
@@ -28,21 +29,26 @@ fi
 
 # Normal mode: verbose output
 if [[ -z "$LATEST" ]]; then
-    echo "Failed to fetch latest version (GitHub API rate limit?)."
+    gum style --width "$WIDTH" --border normal --border-foreground 6 --padding "1 2" "Failed to fetch latest version (GitHub API rate limit?)."
     exit 1
 fi
 
 if [[ -z "$INSTALLED" ]]; then
-    echo "Noctalia is not installed."
-    echo "Latest:    $LATEST"
+    gum style --width "$WIDTH" --border normal --border-foreground 6 --padding "1 2" "Noctalia is not installed." \
+    "Latest:    $LATEST"
     exit 2
 fi
 
-echo "Installed: $INSTALLED"
-echo "Latest:    $LATEST"
-
 if [[ "$HAS_UPDATE" -eq 1 ]]; then
-    echo "Update available!"
+    STATUS="Update available!"
 else
-    echo "Up to date."
+    STATUS="Up to date."
 fi
+
+gum style --width "$WIDTH" --border normal --border-foreground 6 --padding "1 2" \
+    "Noctalia:" \
+    "" \
+    "Installed: $INSTALLED" \
+    "Latest:    $LATEST" \
+    "" \
+    "$STATUS"

@@ -12,6 +12,9 @@ sudo pacman -S --needed --noconfirm kitty
 log "Installing starship prompt..."
 sudo pacman -S --needed --noconfirm starship
 
+log "Installing gum..."
+sudo yay -S --needed --noconfirm gum
+
 log "Installing MPD stack..."
 sudo pacman -S --needed --noconfirm mpd mpc mpdris2 python-mutagen
 
