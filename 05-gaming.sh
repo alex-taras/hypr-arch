@@ -13,11 +13,10 @@ sudo pacman -S --needed --noconfirm \
     gamescope \
     gamemode \
     goverlay \
-    mangohud \
-    vkbasalt
+    mangohud
 
-log "Installing vkBasalt CAS shader..."
-yay -S --needed --noconfirm pascube
+log "Installing vkBasalt pascube..."
+yay -S --needed --noconfirm pascube vkbasalt
 
 log "Installing ProtonPlus..."
 yay -S --needed --noconfirm protonplus
