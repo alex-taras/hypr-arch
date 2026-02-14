@@ -110,6 +110,8 @@ if [ ! -f /etc/samba/smb.conf ]; then
     security = user
     map to guest = never
     passdb backend = tdbsam
+    client min protocol = SMB2
+    client max protocol = SMB3
 EOF
 fi
 
@@ -153,8 +155,24 @@ else
 fi
 
 log "Enabling Samba services..."
-sudo systemctl enable --now smb nmb
-sudo systemctl restart smb nmb
+sudo systemctl enable --now smb nmb wsdd
+sudo systemctl restart smb nmb wsdd
+
+log "Configuring firewall for SMB and network discovery..."
+sudo pacman -S --needed --noconfirm ufw
+sudo ufw allow 137/udp comment 'NetBIOS Name Service'
+sudo ufw allow 138/udp comment 'NetBIOS Datagram'
+sudo ufw allow 139/tcp comment 'NetBIOS Session'
+sudo ufw allow 445/tcp comment 'SMB'
+sudo ufw allow 5353/udp comment 'mDNS'
+sudo ufw allow 3702/udp comment 'WS-Discovery'
+sudo ufw allow 22/tcp comment 'SSH'
+sudo ufw allow 53 comment 'Waydroid DNS'
+sudo ufw allow 67/udp comment 'Waydroid DHCP'
+sudo ufw default allow FORWARD
+sudo ufw --force enable
+sudo systemctl enable --now ufw
+log "Firewall configured and enabled"
 
 log "Post-install configuration complete!"
 log "NFS mount: /mnt/music"

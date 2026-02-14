@@ -25,7 +25,14 @@ log "Installing file manager and thumbnailers..."
 sudo pacman -S --needed --noconfirm \
     nautilus \
     file-roller \
+    gvfs \
     gvfs-smb \
+    gvfs-mtp \
+    gvfs-nfs \
+    gvfs-afc \
+    gvfs-goa \
+    gvfs-gphoto2 \
+    gvfs-dnssd \
     tumbler \
     ffmpegthumbnailer \
     poppler-glib

@@ -43,7 +43,7 @@ sudo systemctl enable --now rpcbind
 sudo systemctl enable --now nfs-client.target
 
 log "Installing Samba..."
-sudo pacman -S --needed --noconfirm samba smbclient
+sudo pacman -S --needed --noconfirm samba smbclient wsdd
 
 log "Enabling SSH..."
 sudo pacman -S --needed --noconfirm openssh
