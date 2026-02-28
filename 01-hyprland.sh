@@ -14,7 +14,7 @@ sudo pacman -S --needed --noconfirm hyprland
 
 log "Installing Noctalia shell dependencies..."
 yay -S --needed --noconfirm \
-    quickshell \
+    noctalia-qs \
     brightnessctl \
     git \
     imagemagick \
