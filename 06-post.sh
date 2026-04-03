@@ -44,6 +44,19 @@ else
     log "No dotfiles directory found, skipping"
 fi
 
+log "Deploying Solaar config..."
+if [ -d ./dotfiles/solaar ]; then
+    if [ -d ~/.config/solaar ]; then
+        cp -r ~/.config/solaar ~/.config/solaar.bak
+        log "Existing Solaar config backed up to ~/.config/solaar.bak"
+    fi
+    mkdir -p ~/.config/solaar
+    cp -r ./dotfiles/solaar/* ~/.config/solaar/
+    log "Solaar config deployed to ~/.config/solaar/"
+else
+    log "No solaar config found, skipping"
+fi
+
 log "Deploying bin scripts..."
 if [ -d ./bin ]; then
     mkdir -p ~/bin

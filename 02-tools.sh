@@ -43,6 +43,13 @@ sudo pacman -S --needed --noconfirm networkmanager
 log "Enabling NetworkManager..."
 sudo systemctl enable --now NetworkManager
 
+log "Installing Solaar (Logitech device manager)..."
+sudo pacman -S --needed --noconfirm solaar
+
+log "Installing ydotoold (input event injector)..."
+sudo pacman -S --needed --noconfirm ydotool
+sudo systemctl enable --now ydotoold
+
 log "Installing rmpc (MPD TUI client) via cargo..."
 if command -v rmpc &>/dev/null; then
     log "rmpc already installed"
