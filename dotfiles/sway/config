@@ -65,6 +65,12 @@ gaps outer 2
 default_border pixel 2
 default_floating_border pixel 2
 
+corner_radius 5
+
+blur enable
+blur_passes 3
+blur_radius 5
+
 
 # Global opacity (hyprland had 0.8 active / 0.7 inactive; sway has no native active/inactive split)
 for_window [app_id=".*"] opacity 0.95

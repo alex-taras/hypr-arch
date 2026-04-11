@@ -11,8 +11,8 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 log "Installing GTK/Qt theming dependencies..."
 sudo pacman -S --needed --noconfirm adw-gtk-theme qt5ct qt6ct kvantum breeze-icons
 
-log "Installing Sway..."
-sudo pacman -S --needed --noconfirm sway
+log "Installing SwayFX..."
+yay -S --needed --noconfirm swayfx
 
 log "Installing Noctalia shell dependencies..."
 yay -S --needed --noconfirm \
