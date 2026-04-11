@@ -1,0 +1,212 @@
+# ~/.config/sway/config
+# Migrated from Hyprland
+
+#############################
+### NOCTALIA THEME        ###
+#############################
+include ~/.config/sway/noctalia
+
+###################
+### VARIABLES   ###
+###################
+set $mod Mod4
+set $terminal kitty
+set $fileManager thunar
+set $menu qs -c noctalia-shell ipc call launcher toggle
+set $browser firefox https://www.google.com
+set $browserIncognito firefox --private-window https://www.google.com
+set $logoutMenu qs -c noctalia-shell ipc call sessionMenu toggle
+
+################
+### MONITORS ###
+################
+output DP-2     resolution 2560x1440@143.97Hz position 1952,0
+output HDMI-A-2 resolution 1920x1080@60Hz     position 32,0
+
+workspace 1 output DP-2
+workspace 2 output HDMI-A-2
+workspace 3 output DP-2
+workspace 4 output HDMI-A-2
+workspace 5 output HDMI-A-2
+
+#############################
+### ENVIRONMENT VARIABLES ###
+#############################
+exec_always sh -c '\
+    export XCURSOR_SIZE=24 \
+           GTK_THEME=Adwaita:dark \
+           QT_QPA_PLATFORMTHEME=qt6ct \
+           QT_STYLE_OVERRIDE=kvantum \
+           XDG_CURRENT_DESKTOP=sway \
+           "XDG_DATA_DIRS=$HOME/.local/share/flatpak/exports/share:/var/lib/flatpak/exports/share:/usr/share:/usr/local/share" && \
+    systemctl --user import-environment WAYLAND_DISPLAY DISPLAY XCURSOR_SIZE GTK_THEME QT_QPA_PLATFORMTHEME QT_STYLE_OVERRIDE XDG_CURRENT_DESKTOP XDG_DATA_DIRS && \
+    dbus-update-activation-environment --systemd WAYLAND_DISPLAY DISPLAY XCURSOR_SIZE GTK_THEME QT_QPA_PLATFORMTHEME QT_STYLE_OVERRIDE XDG_CURRENT_DESKTOP XDG_DATA_DIRS'
+
+################
+### AUTOSTART ###
+################
+exec solaar --window=hide
+exec ydotoold
+exec swayidle -w \
+    timeout 300  'qs -c noctalia-shell ipc call lockScreen lock' \
+    timeout 600  'swaymsg "output * dpms off"' \
+    resume       'swaymsg "output * dpms on"' \
+    before-sleep 'qs -c noctalia-shell ipc call lockScreen lock'
+exec qs -c noctalia-shell
+
+#####################
+### LOOK AND FEEL ###
+#####################
+font pango:monospace 10
+
+gaps inner 2
+gaps outer 2
+
+default_border pixel 2
+default_floating_border pixel 2
+
+
+# Global opacity (hyprland had 0.8 active / 0.7 inactive; sway has no native active/inactive split)
+for_window [app_id=".*"] opacity 0.95
+for_window [class=".*"]  opacity 0.95
+
+exec_always gsettings set org.gnome.desktop.interface color-scheme "prefer-dark"
+exec_always gsettings set org.gnome.desktop.interface gtk-theme "adw-gtk3-dark"
+
+#############
+### INPUT ###
+#############
+seat * hide_cursor 300000
+
+focus_follows_mouse yes
+
+input type:keyboard {
+    xkb_layout us
+}
+
+input type:pointer {
+    accel_profile flat
+    pointer_accel 0
+}
+
+input type:touchpad {
+    natural_scroll disabled
+}
+
+##############################
+### WINDOWS AND WORKSPACES ###
+##############################
+# Drag/resize with mouse
+floating_modifier $mod normal
+
+# Floating window size presets
+for_window [app_id="floating-small"]  floating enable
+for_window [app_id="floating-small"]  resize set 275 300
+for_window [app_id="floating-small"]  move position center
+for_window [app_id="floating-medium"] floating enable
+for_window [app_id="floating-medium"] resize set 1067 600
+for_window [app_id="floating-medium"] move position center
+for_window [app_id="floating-large"]  floating enable
+for_window [app_id="floating-large"]  resize set 1600 900
+for_window [app_id="floating-large"]  move position center
+
+# Polkit
+for_window [app_id="xfce-polkit"] floating enable
+for_window [app_id="xfce-polkit"] move position center
+
+# LibreWolf/Firefox save dialogs — force tiled
+for_window [app_id="librewolf" title=".*(Enter name of file to save to|Save Image).*"] floating disable
+for_window [app_id="firefox"   title=".*Enter name of file to save to.*"]              floating disable
+for_window [app_id="xdg-desktop-portal-gtk"]                                           floating disable
+
+# Wine/game launchers — force tiled (XWayland, match by class)
+for_window [class="battle.net.exe"]        floating disable
+for_window [class="galaxyclient.exe"]      floating disable
+for_window [class="epicgameslauncher.exe"] floating disable
+for_window [app_id="openttd"]              floating disable
+
+
+###################
+### KEYBINDINGS ###
+###################
+
+# 1. Applications
+bindsym $mod+Return   exec $terminal
+bindsym $mod+space    exec $menu
+bindsym $mod+f        exec $fileManager
+bindsym $mod+b        exec $browser
+bindsym $mod+Shift+b  exec $browserIncognito
+bindsym $mod+m        exec flatpak run com.spotify.Client
+bindsym $mod+Shift+m  exec kitty -e rmpc
+
+# 2. Webapps
+bindsym $mod+a        exec gtk-launch chrome-claude.ai__-Default
+bindsym $mod+Shift+w  exec gtk-launch chrome-web.whatsapp.com__-Default
+bindsym $mod+e        exec gtk-launch chrome-mail.proton.me__-Default
+bindsym $mod+v        exec gtk-launch chrome-192.168.1.137__web-Default
+bindsym $mod+k        exec gtk-launch chrome-keep.google.com__-Default
+
+# 3. Window management
+bindsym $mod+w        kill
+bindsym $mod+t        fullscreen toggle
+bindsym $mod+Shift+t  floating toggle
+bindsym $mod+s        layout toggle split
+
+# 4. System
+bindsym $mod+Shift+q  exec $logoutMenu
+bindsym $mod+l        exec qs -c noctalia-shell ipc call lockScreen lock
+bindsym $mod+h        exec qs -c noctalia-shell ipc call plugin:keybind-cheatsheet toggle
+
+# 5. Screenshots
+bindsym $mod+p        exec mkdir -p ~/Pictures/Screenshots && grim -o $(swaymsg -t get_outputs | jq -r '.[] | select(.focused) | .name') ~/Pictures/Screenshots/screenshot-$(date +%Y%m%d-%H%M%S).png
+bindsym $mod+Shift+p  exec mkdir -p ~/Pictures/Screenshots && grim -g "$(slurp)" ~/Pictures/Screenshots/screenshot-$(date +%Y%m%d-%H%M%S).png
+
+# 6. Focus movement
+bindsym $mod+Left     focus left
+bindsym $mod+Right    focus right
+bindsym $mod+Up       focus up
+bindsym $mod+Down     focus down
+bindsym $mod+Tab      focus next sibling
+
+# 7. Workspaces — switch
+bindsym $mod+1 workspace 1
+bindsym $mod+2 workspace 2
+bindsym $mod+3 workspace 3
+bindsym $mod+4 workspace 4
+bindsym $mod+5 workspace 5
+bindsym $mod+6 workspace 6
+bindsym $mod+7 workspace 7
+bindsym $mod+8 workspace 8
+bindsym $mod+9 workspace 9
+bindsym $mod+0 workspace 10
+
+# 7. Workspaces — move window
+bindsym $mod+Shift+1 move container to workspace 1
+bindsym $mod+Shift+2 move container to workspace 2
+bindsym $mod+Shift+3 move container to workspace 3
+bindsym $mod+Shift+4 move container to workspace 4
+bindsym $mod+Shift+5 move container to workspace 5
+bindsym $mod+Shift+6 move container to workspace 6
+bindsym $mod+Shift+7 move container to workspace 7
+bindsym $mod+Shift+8 move container to workspace 8
+bindsym $mod+Shift+9 move container to workspace 9
+bindsym $mod+Shift+0 move container to workspace 10
+
+# 8. Mouse scroll workspace switching
+bindsym --whole-window $mod+button4 workspace prev
+bindsym --whole-window $mod+button5 workspace next
+
+# 9. Media keys
+bindsym XF86AudioRaiseVolume exec qs -c noctalia-shell ipc call volume increase
+bindsym XF86AudioLowerVolume exec qs -c noctalia-shell ipc call volume decrease
+bindsym XF86AudioMute        exec qs -c noctalia-shell ipc call volume muteOutput
+bindsym XF86AudioMicMute     exec qs -c noctalia-shell ipc call volume muteInput
+bindsym XF86AudioNext        exec qs -c noctalia-shell ipc call media next
+bindsym XF86AudioPlay        exec qs -c noctalia-shell ipc call media playPause
+bindsym XF86AudioPrev        exec qs -c noctalia-shell ipc call media previous
+bindsym XF86PowerOff         exec $logoutMenu
+bindsym XF86Calculator       exec qalculate-gtk
+bindsym XF86ScreenSaver      exec qs -c noctalia-shell ipc call lockScreen lock
+
+# Hard paste into GameScope
+bindsym $mod+Shift+Insert exec /home/alext/bin/gamepaste.sh
