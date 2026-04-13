@@ -41,4 +41,10 @@ sudo pacman -S --needed --noconfirm \
     slurp \
     polkit-gnome
 
+log "Installing Nordzy icon theme..."
+git clone https://github.com/MolassesLover/Nordzy-icon /tmp/Nordzy-icon
+cd /tmp/Nordzy-icon && sudo ./install.sh && cd -
+rm -rf /tmp/Nordzy-icon
+gsettings set org.gnome.desktop.interface icon-theme 'Nordzy-dark'
+
 log "Hyprland and Noctalia setup complete!"

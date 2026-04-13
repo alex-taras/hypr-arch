@@ -56,6 +56,7 @@ sudo tee /etc/gtk-3.0/settings.ini > /dev/null <<'EOF'
 [Settings]
 gtk-theme-name = Adwaita-dark
 gtk-application-prefer-dark-theme = true
+gtk-icon-theme-name = Nordzy-dark
 EOF
 sudo tee /etc/gtk-2.0/gtkrc > /dev/null <<'EOF'
 gtk-theme-name = "Adwaita-dark"
@@ -66,8 +67,14 @@ log "Setting system environment variables..."
 grep -q 'GTK_THEME' /etc/environment || echo 'GTK_THEME=Adwaita:dark' | sudo tee -a /etc/environment
 grep -q 'XDG_CURRENT_DESKTOP' /etc/environment || echo 'XDG_CURRENT_DESKTOP=sway' | sudo tee -a /etc/environment
 
+log "Installing Nordzy icon theme..."
+git clone https://github.com/MolassesLover/Nordzy-icon /tmp/Nordzy-icon
+cd /tmp/Nordzy-icon && sudo ./install.sh && cd -
+rm -rf /tmp/Nordzy-icon
+
 log "Applying gsettings dark theme..."
 gsettings set org.gnome.desktop.interface color-scheme 'prefer-dark'
 gsettings set org.gnome.desktop.interface gtk-theme 'adw-gtk3-dark'
+gsettings set org.gnome.desktop.interface icon-theme 'Nordzy-dark'
 
 log "Sway and Noctalia setup complete!"
