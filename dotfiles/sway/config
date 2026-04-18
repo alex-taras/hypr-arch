@@ -59,6 +59,8 @@ exec qs -c noctalia-shell
 #####################
 font pango:monospace 10
 
+default_orientation auto
+
 gaps inner 2
 gaps outer 2
 
