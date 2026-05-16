@@ -31,6 +31,9 @@ SmartPanel {
   panelAnchorLeft: pluginInstance?.panelAnchorLeft ?? false
   panelAnchorRight: pluginInstance?.panelAnchorRight ?? false
 
+  // Panel background color
+  panelBackgroundColor: pluginInstance?.panelBackgroundColor ?? Color.mSurface
+
   // Panel content is dynamically loaded
   panelContent: Component {
     Item {
@@ -40,7 +43,17 @@ SmartPanel {
       readonly property var geometryPlaceholder: pluginContentItem
 
       // Panel properties expected by SmartPanel
-      readonly property bool allowAttach: (pluginContentLoader.item && pluginContentLoader.item.allowAttach !== undefined) ? pluginContentLoader.item.allowAttach : true
+      // A plugin can opt out of attachment (allowAttach: false) but cannot override
+      // the global "attach panels to bar" setting — if that setting is off, panels
+      // stay detached regardless of what the plugin requests.
+      readonly property bool allowAttach: {
+        var globalAllow = Settings.data.ui.panelsAttachedToBar || root.forceAttachToBar;
+        if (!globalAllow)
+          return false;
+        if (pluginContentLoader.item && pluginContentLoader.item.allowAttach !== undefined)
+          return pluginContentLoader.item.allowAttach;
+        return globalAllow;
+      }
       // Expose preferred dimensions from plugin panel content
       // Only define these if the plugin provides them
       property var contentPreferredWidth: {
@@ -151,16 +164,14 @@ SmartPanel {
     // Get plugin API
     var api = PluginService.getPluginAPI(pluginId);
 
-    // Activate loader and set component simultaneously
+    // Use setSource with initial properties so pluginApi is available
+    // from the first binding evaluation (before onLoaded)
     root.contentLoader.active = true;
-    root.contentLoader.sourceComponent = component;
+    root.contentLoader.setSource(component.url, api ? {
+                                                        "pluginApi": api
+                                                      } : {});
 
-    // Immediately inject API (before any bindings evaluate)
     if (root.contentLoader.item) {
-      if (root.contentLoader.item.hasOwnProperty("pluginApi")) {
-        root.contentLoader.item.pluginApi = api;
-      }
-
       root.pluginInstance = root.contentLoader.item;
       root.currentPluginId = pluginId;
 

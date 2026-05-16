@@ -21,7 +21,7 @@ Item {
   property int sectionWidgetIndex: -1
   property int sectionWidgetsCount: 0
 
-  property var widgetMetadata: BarWidgetRegistry.widgetMetadata[widgetId]
+  property var widgetMetadata: BarWidgetRegistry.widgetMetadata[widgetId] ?? {}
   // Explicit screenName property ensures reactive binding when screen changes
   readonly property string screenName: screen ? screen.name : ""
   property var widgetSettings: {
@@ -40,9 +40,15 @@ Item {
   readonly property real barFontSize: Style.getBarFontSizeForScreen(screenName)
 
   readonly property bool compactMode: widgetSettings.compactMode !== undefined ? widgetSettings.compactMode : widgetMetadata.compactMode
-  readonly property bool usePrimaryColor: widgetSettings.usePrimaryColor !== undefined ? widgetSettings.usePrimaryColor : widgetMetadata.usePrimaryColor
+  readonly property string iconColorKey: widgetSettings.iconColor !== undefined ? widgetSettings.iconColor : widgetMetadata.iconColor
+  readonly property string textColorKey: widgetSettings.textColor !== undefined ? widgetSettings.textColor : widgetMetadata.textColor
+
   readonly property bool useMonospaceFont: widgetSettings.useMonospaceFont !== undefined ? widgetSettings.useMonospaceFont : widgetMetadata.useMonospaceFont
+  readonly property bool usePadding: !compactMode && !isVertical && useMonospaceFont && ((widgetSettings.usePadding !== undefined) ? widgetSettings.usePadding : widgetMetadata.usePadding)
+
   readonly property bool showCpuUsage: (widgetSettings.showCpuUsage !== undefined) ? widgetSettings.showCpuUsage : widgetMetadata.showCpuUsage
+  readonly property bool showCpuCores: (widgetSettings.showCpuCores !== undefined) ? widgetSettings.showCpuCores : widgetMetadata.showCpuCores
+  readonly property bool showCpuFreq: (widgetSettings.showCpuFreq !== undefined) ? widgetSettings.showCpuFreq : widgetMetadata.showCpuFreq
   readonly property bool showCpuTemp: (widgetSettings.showCpuTemp !== undefined) ? widgetSettings.showCpuTemp : widgetMetadata.showCpuTemp
   readonly property bool showGpuTemp: (widgetSettings.showGpuTemp !== undefined) ? widgetSettings.showGpuTemp : widgetMetadata.showGpuTemp
   readonly property bool showMemoryUsage: (widgetSettings.showMemoryUsage !== undefined) ? widgetSettings.showMemoryUsage : widgetMetadata.showMemoryUsage
@@ -50,70 +56,89 @@ Item {
   readonly property bool showSwapUsage: (widgetSettings.showSwapUsage !== undefined) ? widgetSettings.showSwapUsage : widgetMetadata.showSwapUsage
   readonly property bool showNetworkStats: (widgetSettings.showNetworkStats !== undefined) ? widgetSettings.showNetworkStats : widgetMetadata.showNetworkStats
   readonly property bool showDiskUsage: (widgetSettings.showDiskUsage !== undefined) ? widgetSettings.showDiskUsage : widgetMetadata.showDiskUsage
+  readonly property bool showDiskUsageAsPercent: (widgetSettings.showDiskUsageAsPercent !== undefined) ? widgetSettings.showDiskUsageAsPercent : widgetMetadata.showDiskUsageAsPercent
+  readonly property bool showDiskAvailable: (widgetSettings.showDiskAvailable !== undefined) ? widgetSettings.showDiskAvailable : widgetMetadata.showDiskAvailable
   readonly property bool showLoadAverage: (widgetSettings.showLoadAverage !== undefined) ? widgetSettings.showLoadAverage : widgetMetadata.showLoadAverage
   readonly property string diskPath: (widgetSettings.diskPath !== undefined) ? widgetSettings.diskPath : widgetMetadata.diskPath
   readonly property string fontFamily: useMonospaceFont ? Settings.data.ui.fontFixed : Settings.data.ui.fontDefault
+
+  readonly property int paddingPercent: usePadding ? String("100%").length : 0
+  readonly property int paddingTemp: usePadding ? String("999°").length : 0
+  readonly property int paddingCpuFreq: usePadding ? String("9.9").length : 0
+  readonly property int paddingSpeed: usePadding ? String("9999G").length : 0
 
   readonly property real iconSize: Style.toOdd(capsuleHeight * 0.48)
   readonly property real miniGaugeWidth: Math.max(3, Style.toOdd(root.iconSize * 0.25))
 
   // Content dimensions for implicit sizing
-  readonly property real contentWidth: isVertical ? capsuleHeight : Math.round(mainGrid.implicitWidth + Style.marginXL)
-  readonly property real contentHeight: isVertical ? Math.round(mainGrid.implicitHeight + Style.marginXL) : capsuleHeight
+  readonly property real contentWidth: isVertical ? capsuleHeight : Math.round(mainGrid.implicitWidth + Style.margin2M)
+  readonly property real contentHeight: isVertical ? Math.round(mainGrid.implicitHeight + Style.margin2M) : capsuleHeight
+
+  readonly property color iconColor: Color.resolveColorKey(iconColorKey)
+  readonly property color textColor: Color.resolveColorKey(textColorKey)
 
   // Size: use implicit width/height
   // BarWidgetLoader sets explicit width/height to extend click area
   implicitWidth: contentWidth
   implicitHeight: contentHeight
 
+  Component.onCompleted: SystemStatService.registerComponent("bar-sysmon:" + (screen?.name || "unknown"))
+  Component.onDestruction: SystemStatService.unregisterComponent("bar-sysmon:" + (screen?.name || "unknown"))
+
   function openExternalMonitor() {
     Quickshell.execDetached(["sh", "-c", Settings.data.systemMonitor.externalMonitor]);
   }
 
   // Build comprehensive tooltip text with all stats
-  function buildTooltipText() {
-    let lines = [];
+  function buildTooltipContent() {
+    let rows = [];
 
     // CPU
-    lines.push(`${I18n.tr("system-monitor.cpu-usage")}: ${Math.round(SystemStatService.cpuUsage)}%`);
+    rows.push([I18n.tr("system-monitor.cpu-usage"), `${Math.round(SystemStatService.cpuUsage)}% (${SystemStatService.cpuFreq.replace(/[^0-9.]/g, "")} GHz)`]);
+    if (showCpuCores) {
+      SystemStatService.coresUsage.forEach((usage, core) => rows.push(["  " + I18n.tr("system-monitor.core-usage", {
+                                                                                        "id": core
+                                                                                      }), `${Math.round(usage)}%`]));
+    }
+
     if (SystemStatService.cpuTemp > 0) {
-      lines.push(`${I18n.tr("system-monitor.cpu-temp")}: ${Math.round(SystemStatService.cpuTemp)}°C`);
+      rows.push([I18n.tr("system-monitor.cpu-temp"), `${Math.round(SystemStatService.cpuTemp)}°C`]);
     }
 
     // GPU (if available)
     if (SystemStatService.gpuAvailable) {
-      lines.push(`${I18n.tr("system-monitor.gpu-temp")}: ${Math.round(SystemStatService.gpuTemp)}°C`);
+      rows.push([I18n.tr("system-monitor.gpu-temp"), `${Math.round(SystemStatService.gpuTemp)}°C`]);
     }
 
     // Load Average
     if (SystemStatService.loadAvg1 >= 0) {
-      lines.push(`${I18n.tr("system-monitor.load-average")}: ${SystemStatService.loadAvg1.toFixed(2)} · ${SystemStatService.loadAvg5.toFixed(2)} · ${SystemStatService.loadAvg15.toFixed(2)}`);
+      rows.push([I18n.tr("system-monitor.load-average"), `${SystemStatService.loadAvg1.toFixed(2)} · ${SystemStatService.loadAvg5.toFixed(2)} · ${SystemStatService.loadAvg15.toFixed(2)}`]);
     }
 
     // Memory
-    lines.push(`${I18n.tr("common.memory")}: ${Math.round(SystemStatService.memPercent)}% (${SystemStatService.formatMemoryGb(SystemStatService.memGb).replace(/[^0-9.]/g, "") + " GB"})`);
+    rows.push([I18n.tr("common.memory"), `${Math.round(SystemStatService.memPercent)}% (${(SystemStatService.memGb).toFixed(1)} GiB)`]);
 
     // Swap (if available)
     if (SystemStatService.swapTotalGb > 0) {
-      lines.push(`${I18n.tr("bar.system-monitor.swap-usage-label")}: ${Math.round(SystemStatService.swapPercent)}% (${SystemStatService.formatMemoryGb(SystemStatService.swapGb).replace(/[^0-9.]/g, "") + " GB"})`);
+      rows.push([I18n.tr("bar.system-monitor.swap-usage-label"), `${Math.round(SystemStatService.swapPercent)}% (${(SystemStatService.swapGb).toFixed(1)} GiB)`]);
     }
 
     // Network
-    lines.push(`${I18n.tr("system-monitor.download-speed")}: ${SystemStatService.formatSpeed(SystemStatService.rxSpeed).replace(/([0-9.]+)([A-Za-z]+)/, "$1 $2")}` + "/s");
-    lines.push(`${I18n.tr("system-monitor.upload-speed")}: ${SystemStatService.formatSpeed(SystemStatService.txSpeed).replace(/([0-9.]+)([A-Za-z]+)/, "$1 $2")}` + "/s");
+    rows.push([I18n.tr("system-monitor.download-speed"), `${SystemStatService.formatSpeed(SystemStatService.rxSpeed).replace(/([0-9.]+)([A-Za-z]+)/, "$1 $2")}` + "/s"]);
+    rows.push([I18n.tr("system-monitor.upload-speed"), `${SystemStatService.formatSpeed(SystemStatService.txSpeed).replace(/([0-9.]+)([A-Za-z]+)/, "$1 $2")}` + "/s"]);
 
     // Disk
     const diskPercent = SystemStatService.diskPercents[diskPath];
     if (diskPercent !== undefined) {
       const usedGb = SystemStatService.diskUsedGb[diskPath] || 0;
       const sizeGb = SystemStatService.diskSizeGb[diskPath] || 0;
-      lines.push(`${I18n.tr("system-monitor.disk")}: ${usedGb.toFixed(1)} GB / ${sizeGb.toFixed(1)} GB (${diskPercent}%)`);
+      const availGb = SystemStatService.diskAvailableGb[diskPath] || 0;
+      rows.push([I18n.tr("system-monitor.disk"), `${diskPercent}% (${usedGb.toFixed(1)} / ${sizeGb.toFixed(1)} GB)`]);
+      rows.push([I18n.tr("common.available"), `${availGb.toFixed(1)} GB`]);
     }
 
-    return lines.join("\n");
+    return rows;
   }
-
-  readonly property color textColor: usePrimaryColor ? Color.mPrimary : Color.mOnSurface
 
   // Visibility-aware warning/critical states (delegates to service)
   readonly property bool cpuWarning: showCpuUsage && SystemStatService.cpuWarning
@@ -134,6 +159,11 @@ Item {
 
     model: [
       {
+        "label": I18n.tr("system-monitor.title"),
+        "action": "sysmon-settings",
+        "icon": "settings"
+      },
+      {
         "label": I18n.tr("actions.widget-settings"),
         "action": "widget-settings",
         "icon": "settings"
@@ -144,7 +174,14 @@ Item {
                    contextMenu.close();
                    PanelService.closeContextMenu(screen);
 
-                   if (action === "widget-settings") {
+                   if (action === "sysmon-settings") {
+                     let monitorCmd = Settings.data.systemMonitor.externalMonitor;
+                     if (monitorCmd && monitorCmd.trim() !== "") {
+                       openExternalMonitor();
+                     } else {
+                       SettingsPanelService.openToTab(SettingsPanel.Tab.System, 0, screen);
+                     }
+                   } else if (action === "widget-settings") {
                      BarService.openWidgetSettings(screen, section, sectionWidgetIndex, widgetId, widgetSettings);
                    }
                  }
@@ -165,40 +202,12 @@ Item {
     Component {
       id: miniGaugeComponent
 
-      Rectangle {
-        id: miniGauge
-        property real ratio: 0 // 0..1
-        property color statColor: Color.mPrimary // Color based on warning/critical state
-
+      NLinearGauge {
+        ratio: 0
+        orientation: Qt.Vertical
+        fillColor: Color.mPrimary
         width: miniGaugeWidth
         height: iconSize
-        radius: width / 2
-        color: Color.mOutline
-
-        // Fill that grows from bottom
-        Rectangle {
-          property real fillHeight: parent.height * Math.min(1, Math.max(0, miniGauge.ratio))
-          width: parent.width
-          height: fillHeight
-          radius: parent.radius
-          color: miniGauge.statColor
-          anchors.bottom: parent.bottom
-
-          Behavior on fillHeight {
-            enabled: !Settings.data.general.animationDisabled
-            NumberAnimation {
-              duration: Style.animationNormal
-              easing.type: Easing.OutCubic
-            }
-          }
-
-          Behavior on color {
-            ColorAnimation {
-              duration: Style.animationNormal
-              easing.type: Easing.OutCubic
-            }
-          }
-        }
       }
     }
 
@@ -209,7 +218,7 @@ Item {
       rows: isVertical ? -1 : 1
       columns: isVertical ? 1 : -1
       rowSpacing: isVertical ? (compactMode ? Style.marginL : Style.marginXL) : 0
-      columnSpacing: isVertical ? 0 : (Style.marginM)
+      columnSpacing: isVertical ? 0 : Style.marginM
 
       // CPU Usage Component
       Item {
@@ -223,6 +232,90 @@ Item {
 
         GridLayout {
           id: cpuUsageContent
+          anchors.centerIn: parent
+
+          property bool verticalDisplay: isVertical && (!compactMode || showCpuCores)
+          flow: verticalDisplay ? GridLayout.TopToBottom : GridLayout.LeftToRight
+          rows: verticalDisplay ? -1 : 1
+          columns: verticalDisplay ? 1 : -1
+          rowSpacing: compactMode ? 3 : Style.marginXS
+          columnSpacing: compactMode ? 3 : Style.marginXS
+
+          Item {
+            Layout.preferredWidth: iconSize
+            Layout.preferredHeight: (compactMode || isVertical) ? iconSize : capsuleHeight
+            Layout.alignment: Qt.AlignCenter
+            Layout.row: (isVertical && !compactMode) ? 1 : 0
+            Layout.column: 0
+
+            NIcon {
+              icon: "cpu-usage"
+              pointSize: iconSize
+              applyUiScale: false
+              x: Style.pixelAlignCenter(parent.width, width)
+              y: Style.pixelAlignCenter(parent.height, contentHeight)
+              color: (cpuWarning || cpuCritical) ? SystemStatService.cpuColor : root.iconColor
+            }
+          }
+
+          // Text mode
+          NText {
+            visible: !compactMode
+            text: `${Math.round(SystemStatService.cpuUsage)}%`.padStart(paddingPercent, " ")
+            family: fontFamily
+            pointSize: barFontSize
+            applyUiScale: false
+            Layout.alignment: Qt.AlignCenter
+            horizontalAlignment: Text.AlignHCenter
+            verticalAlignment: Text.AlignVCenter
+            color: (cpuWarning || cpuCritical) ? SystemStatService.cpuColor : root.textColor
+            Layout.row: isVertical ? 0 : 0
+            Layout.column: isVertical ? 0 : 1
+          }
+
+          // Compact mode general cpu
+          Loader {
+            active: compactMode && !showCpuCores
+            visible: compactMode && !showCpuCores
+            sourceComponent: miniGaugeComponent
+            Layout.alignment: Qt.AlignCenter
+            Layout.row: 0
+            Layout.column: 1
+
+            onLoaded: {
+              item.ratio = Qt.binding(() => SystemStatService.cpuUsage / 100);
+              item.fillColor = Qt.binding(() => SystemStatService.cpuColor);
+            }
+          }
+
+          // Compact mode for cores
+          Repeater {
+            model: (compactMode && showCpuCores) ? SystemStatService.coresUsage : []
+
+            delegate: NLinearGauge {
+              required property var modelData
+              width: isVertical ? iconSize : miniGaugeWidth
+              height: isVertical ? miniGaugeWidth : iconSize
+              orientation: isVertical ? Qt.Horizontal : Qt.Vertical
+              ratio: modelData / 100
+              fillColor: SystemStatService.getCoreUsageColor(modelData)
+            }
+          }
+        }
+      }
+
+      // CPU Frequency Component
+      Item {
+        id: cpuFreqContainer
+        implicitWidth: cpuFreqContent.implicitWidth
+        implicitHeight: cpuFreqContent.implicitHeight
+        Layout.preferredWidth: isVertical ? root.width : implicitWidth
+        Layout.preferredHeight: compactMode ? implicitHeight : capsuleHeight
+        Layout.alignment: isVertical ? Qt.AlignHCenter : Qt.AlignVCenter
+        visible: showCpuFreq && (!isVertical || compactMode)
+
+        GridLayout {
+          id: cpuFreqContent
           anchors.centerIn: parent
           flow: (isVertical && !compactMode) ? GridLayout.TopToBottom : GridLayout.LeftToRight
           rows: (isVertical && !compactMode) ? 2 : 1
@@ -243,21 +336,21 @@ Item {
               applyUiScale: false
               x: Style.pixelAlignCenter(parent.width, width)
               y: Style.pixelAlignCenter(parent.height, contentHeight)
-              color: (cpuWarning || cpuCritical) ? SystemStatService.cpuColor : Color.mOnSurface
+              color: root.iconColor
             }
           }
 
           // Text mode
           NText {
             visible: !compactMode
-            text: `${Math.round(SystemStatService.cpuUsage)}%`
+            text: SystemStatService.cpuFreq.replace("Hz", "").replace(" ", "").padStart(paddingCpuFreq, " ")
             family: fontFamily
             pointSize: barFontSize
             applyUiScale: false
             Layout.alignment: Qt.AlignCenter
             horizontalAlignment: Text.AlignHCenter
             verticalAlignment: Text.AlignVCenter
-            color: (cpuWarning || cpuCritical) ? SystemStatService.cpuColor : textColor
+            color: root.textColor
             Layout.row: isVertical ? 0 : 0
             Layout.column: isVertical ? 0 : 1
           }
@@ -272,8 +365,7 @@ Item {
             Layout.column: 1
 
             onLoaded: {
-              item.ratio = Qt.binding(() => SystemStatService.cpuUsage / 100);
-              item.statColor = Qt.binding(() => SystemStatService.cpuColor);
+              item.ratio = Qt.binding(() => SystemStatService.cpuFreqRatio);
             }
           }
         }
@@ -311,21 +403,21 @@ Item {
               applyUiScale: false
               x: Style.pixelAlignCenter(parent.width, width)
               y: Style.pixelAlignCenter(parent.height, contentHeight)
-              color: (tempWarning || tempCritical) ? SystemStatService.tempColor : Color.mOnSurface
+              color: (tempWarning || tempCritical) ? SystemStatService.tempColor : root.iconColor
             }
           }
 
           // Text mode
           NText {
             visible: !compactMode
-            text: `${Math.round(SystemStatService.cpuTemp)}°`
+            text: `${Math.round(SystemStatService.cpuTemp)}°`.padStart(paddingTemp, " ")
             family: fontFamily
             pointSize: barFontSize
             applyUiScale: false
             Layout.alignment: Qt.AlignCenter
             horizontalAlignment: Text.AlignHCenter
             verticalAlignment: Text.AlignVCenter
-            color: (tempWarning || tempCritical) ? SystemStatService.tempColor : textColor
+            color: (tempWarning || tempCritical) ? SystemStatService.tempColor : root.textColor
             Layout.row: isVertical ? 0 : 0
             Layout.column: isVertical ? 0 : 1
           }
@@ -341,7 +433,7 @@ Item {
 
             onLoaded: {
               item.ratio = Qt.binding(() => SystemStatService.cpuTemp / 100);
-              item.statColor = Qt.binding(() => SystemStatService.tempColor);
+              item.fillColor = Qt.binding(() => SystemStatService.tempColor);
             }
           }
         }
@@ -379,21 +471,21 @@ Item {
               applyUiScale: false
               x: Style.pixelAlignCenter(parent.width, width)
               y: Style.pixelAlignCenter(parent.height, contentHeight)
-              color: (gpuWarning || gpuCritical) ? SystemStatService.gpuColor : Color.mOnSurface
+              color: (gpuWarning || gpuCritical) ? SystemStatService.gpuColor : root.iconColor
             }
           }
 
           // Text mode
           NText {
             visible: !compactMode
-            text: `${Math.round(SystemStatService.gpuTemp)}°`
+            text: `${Math.round(SystemStatService.gpuTemp)}°`.padStart(paddingTemp, " ")
             family: fontFamily
             pointSize: barFontSize
             applyUiScale: false
             Layout.alignment: Qt.AlignCenter
             horizontalAlignment: Text.AlignHCenter
             verticalAlignment: Text.AlignVCenter
-            color: (gpuWarning || gpuCritical) ? SystemStatService.gpuColor : textColor
+            color: (gpuWarning || gpuCritical) ? SystemStatService.gpuColor : root.textColor
             Layout.row: isVertical ? 0 : 0
             Layout.column: isVertical ? 0 : 1
           }
@@ -409,7 +501,7 @@ Item {
 
             onLoaded: {
               item.ratio = Qt.binding(() => SystemStatService.gpuTemp / 100);
-              item.statColor = Qt.binding(() => SystemStatService.gpuColor);
+              item.fillColor = Qt.binding(() => SystemStatService.gpuColor);
             }
           }
         }
@@ -447,21 +539,21 @@ Item {
               applyUiScale: false
               x: Style.pixelAlignCenter(parent.width, width)
               y: Style.pixelAlignCenter(parent.height, contentHeight)
-              color: Color.mOnSurface
+              color: root.iconColor
             }
           }
 
           // Text mode
           NText {
             visible: !compactMode
-            text: SystemStatService.loadAvg1.toFixed(1)
+            text: `${SystemStatService.loadAvg1.toFixed(1)}`.padStart(usePadding ? `${SystemStatService.nproc.toFixed(1)}`.length : 0, " ")
             family: fontFamily
             pointSize: barFontSize
             applyUiScale: false
             Layout.alignment: Qt.AlignCenter
             horizontalAlignment: Text.AlignHCenter
             verticalAlignment: Text.AlignVCenter
-            color: textColor
+            color: root.textColor
             Layout.row: isVertical ? 0 : 0
             Layout.column: isVertical ? 0 : 1
           }
@@ -477,7 +569,6 @@ Item {
 
             onLoaded: {
               item.ratio = Qt.binding(() => Math.min(1, SystemStatService.loadAvg1 / SystemStatService.nproc));
-              item.statColor = Qt.binding(() => Color.mPrimary);
             }
           }
         }
@@ -515,21 +606,24 @@ Item {
               applyUiScale: false
               x: Style.pixelAlignCenter(parent.width, width)
               y: Style.pixelAlignCenter(parent.height, contentHeight)
-              color: (memWarning || memCritical) ? SystemStatService.memColor : Color.mOnSurface
+              color: (memWarning || memCritical) ? SystemStatService.memColor : root.iconColor
             }
           }
 
           // Text mode
           NText {
             visible: !compactMode
-            text: showMemoryAsPercent ? `${Math.round(SystemStatService.memPercent)}%` : SystemStatService.formatMemoryGb(SystemStatService.memGb)
+            text: SystemStatService.formatRamDisplay({
+                                                       percent: showMemoryAsPercent,
+                                                       padding: usePadding
+                                                     })
             family: fontFamily
             pointSize: barFontSize
             applyUiScale: false
             Layout.alignment: Qt.AlignCenter
             horizontalAlignment: Text.AlignHCenter
             verticalAlignment: Text.AlignVCenter
-            color: (memWarning || memCritical) ? SystemStatService.memColor : textColor
+            color: (memWarning || memCritical) ? SystemStatService.memColor : root.textColor
             Layout.row: isVertical ? 0 : 0
             Layout.column: isVertical ? 0 : 1
           }
@@ -545,7 +639,7 @@ Item {
 
             onLoaded: {
               item.ratio = Qt.binding(() => SystemStatService.memPercent / 100);
-              item.statColor = Qt.binding(() => SystemStatService.memColor);
+              item.fillColor = Qt.binding(() => SystemStatService.memColor);
             }
           }
         }
@@ -583,21 +677,25 @@ Item {
               applyUiScale: false
               x: Style.pixelAlignCenter(parent.width, width)
               y: Style.pixelAlignCenter(parent.height, contentHeight)
-              color: (swapWarning || swapCritical) ? SystemStatService.swapColor : Color.mOnSurface
+              color: (swapWarning || swapCritical) ? SystemStatService.swapColor : root.iconColor
             }
           }
 
           // Text mode
           NText {
             visible: !compactMode
-            text: `${Math.round(SystemStatService.swapPercent)}%`
+            text: SystemStatService.formatRamDisplay({
+                                                       swap: true,
+                                                       percent: true,
+                                                       padding: usePadding
+                                                     })
             family: fontFamily
             pointSize: barFontSize
             applyUiScale: false
             Layout.alignment: Qt.AlignCenter
             horizontalAlignment: Text.AlignHCenter
             verticalAlignment: Text.AlignVCenter
-            color: (swapWarning || swapCritical) ? SystemStatService.swapColor : textColor
+            color: (swapWarning || swapCritical) ? SystemStatService.swapColor : root.textColor
             Layout.row: isVertical ? 0 : 0
             Layout.column: isVertical ? 0 : 1
           }
@@ -613,7 +711,7 @@ Item {
 
             onLoaded: {
               item.ratio = Qt.binding(() => SystemStatService.swapPercent / 100);
-              item.statColor = Qt.binding(() => SystemStatService.swapColor);
+              item.fillColor = Qt.binding(() => SystemStatService.swapColor);
             }
           }
         }
@@ -650,20 +748,21 @@ Item {
               applyUiScale: false
               x: Style.pixelAlignCenter(parent.width, width)
               y: Style.pixelAlignCenter(parent.height, contentHeight)
+              color: root.iconColor
             }
           }
 
           // Text mode
           NText {
             visible: !compactMode
-            text: isVertical ? SystemStatService.formatCompactSpeed(SystemStatService.rxSpeed) : SystemStatService.formatSpeed(SystemStatService.rxSpeed)
+            text: isVertical ? SystemStatService.formatCompactSpeed(SystemStatService.rxSpeed) : SystemStatService.formatSpeed(SystemStatService.rxSpeed).padStart(paddingSpeed, " ")
             family: fontFamily
             pointSize: barFontSize
             applyUiScale: false
             Layout.alignment: Qt.AlignCenter
             horizontalAlignment: Text.AlignHCenter
             verticalAlignment: Text.AlignVCenter
-            color: textColor
+            color: root.textColor
             Layout.row: isVertical ? 0 : 0
             Layout.column: isVertical ? 0 : 1
           }
@@ -715,20 +814,21 @@ Item {
               applyUiScale: false
               x: Style.pixelAlignCenter(parent.width, width)
               y: Style.pixelAlignCenter(parent.height, contentHeight)
+              color: root.iconColor
             }
           }
 
           // Text mode
           NText {
             visible: !compactMode
-            text: isVertical ? SystemStatService.formatCompactSpeed(SystemStatService.txSpeed) : SystemStatService.formatSpeed(SystemStatService.txSpeed)
+            text: isVertical ? SystemStatService.formatCompactSpeed(SystemStatService.txSpeed) : SystemStatService.formatSpeed(SystemStatService.txSpeed).padStart(paddingSpeed, " ")
             family: fontFamily
             pointSize: barFontSize
             applyUiScale: false
             Layout.alignment: Qt.AlignCenter
             horizontalAlignment: Text.AlignHCenter
             verticalAlignment: Text.AlignVCenter
-            color: textColor
+            color: root.textColor
             Layout.row: isVertical ? 0 : 0
             Layout.column: isVertical ? 0 : 1
           }
@@ -781,21 +881,25 @@ Item {
               applyUiScale: false
               x: Style.pixelAlignCenter(parent.width, width)
               y: Style.pixelAlignCenter(parent.height, contentHeight)
-              color: (diskWarning || diskCritical) ? SystemStatService.getDiskColor(diskPath) : Color.mOnSurface
+              color: (diskWarning || diskCritical) ? SystemStatService.getDiskColor(diskPath) : root.iconColor
             }
           }
 
           // Text mode
           NText {
             visible: !compactMode
-            text: SystemStatService.diskPercents[diskPath] ? `${SystemStatService.diskPercents[diskPath]}%` : "n/a"
+            text: SystemStatService.formatDiskDisplay(diskPath, {
+                                                        percent: showDiskUsageAsPercent,
+                                                        available: showDiskAvailable,
+                                                        padding: usePadding
+                                                      })
             family: fontFamily
             pointSize: barFontSize
             applyUiScale: false
             Layout.alignment: Qt.AlignCenter
             horizontalAlignment: Text.AlignHCenter
             verticalAlignment: Text.AlignVCenter
-            color: (diskWarning || diskCritical) ? SystemStatService.getDiskColor(diskPath) : textColor
+            color: (diskWarning || diskCritical) ? SystemStatService.getDiskColor(diskPath) : root.textColor
             Layout.row: isVertical ? 0 : 0
             Layout.column: isVertical ? 0 : 1
           }
@@ -810,8 +914,8 @@ Item {
             Layout.column: 1
 
             onLoaded: {
-              item.ratio = Qt.binding(() => (SystemStatService.diskPercents[diskPath] ?? 0) / 100);
-              item.statColor = Qt.binding(() => SystemStatService.getDiskColor(diskPath));
+              item.ratio = Qt.binding(() => (showDiskAvailable ? SystemStatService.diskAvailPercents[diskPath] : SystemStatService.diskPercents[diskPath] ?? 0) / 100);
+              item.fillColor = Qt.binding(() => SystemStatService.getDiskColor(diskPath, showDiskAvailable));
             }
           }
         }
@@ -839,8 +943,10 @@ Item {
                  }
                }
     onEntered: {
-      TooltipService.show(root, buildTooltipText(), BarService.getTooltipDirection(root.screen?.name));
-      tooltipRefreshTimer.start();
+      if (!PanelService.getPanel("systemStatsPanel", screen).isPanelOpen) {
+        TooltipService.show(root, buildTooltipContent(), BarService.getTooltipDirection(root.screen?.name));
+        tooltipRefreshTimer.start();
+      }
     }
     onExited: {
       tooltipRefreshTimer.stop();
@@ -854,7 +960,7 @@ Item {
     repeat: true
     onTriggered: {
       if (tooltipArea.containsMouse) {
-        TooltipService.updateText(buildTooltipText());
+        TooltipService.updateText(buildTooltipContent());
       }
     }
   }

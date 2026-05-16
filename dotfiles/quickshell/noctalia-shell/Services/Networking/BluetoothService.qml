@@ -6,44 +6,37 @@ import Quickshell.Bluetooth
 import Quickshell.Io
 import "../../Helpers/BluetoothUtils.js" as BluetoothUtils
 import qs.Commons
+import qs.Services.System
 import qs.Services.UI
 
 Singleton {
   id: root
 
-  // Constants (centralized tunables)
-  readonly property int ctlPollMs: 1500
-  readonly property int ctlPollSoonMs: 250
-  readonly property int scanAutoStopMs: 6000
-
-  property bool airplaneModeToggled: false
-  property bool lastBluetoothBlocked: false
-  property bool lastWifiBlocked: false
   readonly property BluetoothAdapter adapter: Bluetooth.defaultAdapter
 
-  // Power/blocked state
-  readonly property bool enabled: adapter ? adapter.enabled : root.ctlPowered
-  readonly property bool blocked: adapter?.state === BluetoothAdapterState.Blocked
-  property bool ctlPowered: false
-  property bool ctlDiscovering: false
-  property bool ctlDiscoverable: false
-  // Adapter discoverability (advertising) flag (driven by bluetoothctl)
-  readonly property bool discoverable: root.ctlDiscoverable
+  // Power/availability state
+  readonly property bool bluetoothAvailable: !!adapter
+  readonly property bool enabled: adapter?.enabled ?? false
+  readonly property bool blocked: adapter?.state === BluetoothAdapter.Blocked
+
+  // Exposed scanning flag for UI button state; reflects adapter discovery when available
+  readonly property bool scanningActive: adapter?.discovering ?? false
+
+  // Adapter discoverability (advertising) flag
+  readonly property bool discoverable: adapter?.discoverable ?? false
   readonly property var devices: adapter ? adapter.devices : null
   readonly property var connectedDevices: {
     if (!adapter || !adapter.devices) {
       return [];
     }
-    return adapter.devices.values.filter(function (dev) {
-      return dev && dev.connected;
-    });
+    return adapter.devices.values.filter(dev => dev && dev.connected);
   }
 
   // Experimental: best‑effort RSSI polling for connected devices (without root)
   // Enabled in debug mode or via user setting in Settings > Network
-  property bool rssiPollingEnabled: (Settings && (Settings.isDebug || (Settings.data && Settings.data.network && Settings.data.network.bluetoothRssiPollingEnabled))) ? true : false
-  // Interval can be configured from Settings; defaults to 10s
-  property int rssiPollIntervalMs: (Settings && Settings.data && Settings.data.network && Settings.data.network.bluetoothRssiPollIntervalMs) ? Settings.data.network.bluetoothRssiPollIntervalMs : 10000
+  property bool rssiPollingEnabled: Settings?.data?.network?.bluetoothRssiPollingEnabled || Settings?.isDebug || false
+  // Interval can be configured from Settings; defaults to 60s
+  property int rssiPollIntervalMs: Settings?.data?.network?.bluetoothRssiPollIntervalMs || 60000
   // RSSI helper sub‑component
   property BluetoothRssi rssi: BluetoothRssi {
     enabled: root.enabled && root.rssiPollingEnabled
@@ -52,321 +45,167 @@ Singleton {
   }
 
   // Tunables for CLI pairing/connect flow
-  property int pairWaitSeconds: 20
+  property int pairWaitSeconds: 45
   property int connectAttempts: 5
   property int connectRetryIntervalMs: 2000
 
-  // Internal: temporarily pause discovery during pair/connect to reduce HCI churn
-  // Use a resume deadline to coalesce overlapping pauses safely
+  // Interaction state
+  property bool pinRequired: false
+
+  // Internal variables
   property bool _discoveryWasRunning: false
-  property double _discoveryResumeAtMs: 0
-  // Timer used to restore discovery after temporary pause during pair/connect
-  Timer {
-    id: restoreDiscoveryTimer
-    repeat: false
-    onTriggered: {
-      const now = Date.now();
-      if (now < root._discoveryResumeAtMs) {
-        // Not yet time to resume; reschedule
-        interval = Math.max(100, root._discoveryResumeAtMs - now);
-        restart();
-        return;
-      }
-      if (root._discoveryWasRunning) {
-        root.setScanActive(true, 0);
-      }
-      root._discoveryWasRunning = false;
-      root._discoveryResumeAtMs = 0;
+  property bool _ctlInit: false
+  property var _autoConnectQueue: []
+
+  // Persistent cache for per-device auto-connect toggle
+  property string cacheFile: Settings.cacheDir + "bluetooth_devices.json"
+
+  FileView {
+    id: cacheFileView
+    path: root.cacheFile
+    printErrors: false
+
+    JsonAdapter {
+      id: cacheAdapter
+      property var autoConnectSettings: ({})
     }
   }
 
-  function _pauseDiscoveryFor(ms) {
-    try {
-      // Remember if discovery was running before the first pause
-      root._discoveryWasRunning = root._discoveryWasRunning || !!root.ctlDiscovering;
-      if (root.ctlDiscovering) {
-        root.setScanActive(false, 0);
-      }
-      if (ms && ms > 0) {
-        const now = Date.now();
-        const resumeAt = now + ms;
-        if (resumeAt > root._discoveryResumeAtMs) {
-          root._discoveryResumeAtMs = resumeAt;
-        }
-        restoreDiscoveryTimer.interval = Math.max(100, root._discoveryResumeAtMs - now);
-        restoreDiscoveryTimer.restart();
-      }
-    } catch (_) {}
-  }
-
-  // Persistent process for fallback scanning to keep the session alive
-  Process {
-    id: fallbackScanProcess
-    // Pipe scan on and a long sleep to bluetoothctl to keep it running
-    command: ["sh", "-c", "(echo 'scan on'; sleep 3600) | bluetoothctl"]
-    onExited: Logger.d("Bluetooth", "Fallback scan process exited")
-  }
-
-  // Unify discovery controls and auto‑stop window
-  function setScanActive(active, durationMs) {
-    // Logger.e("Bluetooth", "setScanActive called with active=" + active + ", durationMs=" + durationMs); // used for debugging
-    // Cancel any scheduled resume so manual toggle wins
-    try {
-      root._discoveryResumeAtMs = 0;
-      restoreDiscoveryTimer.stop();
-      root._discoveryWasRunning = false;
-    } catch (_) {}
-
-    // Prefer Quickshell API if available, fall back to bluetoothctl
-    var nativeSuccess = false;
-    try {
-      if (adapter) {
-        if (active && adapter.startDiscovery !== undefined) {
-          // Logger.e("Bluetooth", "Starting discovery with Quickshell API"); // used for debugging
-          adapter.startDiscovery();
-          nativeSuccess = true;
-        } else if (!active && adapter.stopDiscovery !== undefined) {
-          // Logger.e("Bluetooth", "Stopping discovery with Quickshell API"); // used for debugging
-          adapter.stopDiscovery();
-          nativeSuccess = true;
-        }
-      } else {
-        Logger.w("Bluetooth", "Adapter is null/undefined in setScanActive");
-      }
-    } catch (e1) {
-      Logger.e("Bluetooth", "setScanActive failed with exception", e1);
-    }
-
-    Logger.d("Bluetooth", "nativeSuccess=" + nativeSuccess);
-
-    // Only issue bluetoothctl if we didn't use the adapter API
-    if (!nativeSuccess) {
-      if (active) {
-        // Logger.e("Bluetooth", "Starting fallback scan process");
-        fallbackScanProcess.running = true;
-      } else {
-        // Logger.e("Bluetooth", "Stopping fallback scan process");
-        fallbackScanProcess.running = false;
-        // Explicitly send scan off command as well to ensure state is cleared
-        btExec(["bluetoothctl", "scan", "off"]);
-      }
-    } else {
-      // Logger.e("Bluetooth", "Skipping bluetoothctl fallback as native API was used");
-      // Ensure fallback process is stopped if we switched to native
-      if (fallbackScanProcess.running) {
-        fallbackScanProcess.running = false;
-      }
-    }
-
-    if (active && durationMs && durationMs > 0) {
-      manualScanTimer.interval = durationMs;
-      // Logger.e("Bluetooth", "Restarting manualScanTimer with interval " + durationMs + "ms");
-      manualScanTimer.restart();
-    } else {
-      if (manualScanTimer.running) {
-        // Logger.e("Bluetooth", "Stopping manualScanTimer");
-        manualScanTimer.stop();
-      }
-    }
-    requestCtlPoll(ctlPollSoonMs);
-  }
-
-  // Explicit toggle that cancels any pending restore so UI button behaves predictably
-  function toggleDiscovery() {
-    // Logger.e("Bluetooth", "toggleDiscovery called. Adapter present: " + (!!adapter));
-    if (!adapter) {
-      // Logger.e("Bluetooth", "toggleDiscovery aborting: no adapter");
-      return;
-    }
-    // Logger.e("Bluetooth", "toggleDiscovery calling setScanActive. Current scanningActive=" + root.scanningActive);
-    setScanActive(!root.scanningActive, scanAutoStopMs);
-  }
-
-  // Auto-stop manual discovery after a short window
-  Timer {
-    id: manualScanTimer
-    repeat: false
-    onTriggered: {
-      // Logger.e("Bluetooth", "manualScanTimer triggered");
-      // Stop scan if currently active
-      if (root.scanningActive) {
-        //  Logger.e("Bluetooth", "manualScanTimer calling setScanActive(false)");
-        root.setScanActive(false, 0);
-      } else {
-        Logger.d("Bluetooth", "manualScanTimer triggered but scanningActive is false, doing nothing");
-      }
+  // Handle potential case where Quickshell doesnt't properly update adapter after system wakeup
+  Connections {
+    target: Time
+    function onResumed() {
+      ctlPollTimer.restart();
     }
   }
-
-  // Exposed scanning flag for UI button state; reflects adapter discovery when available
-  readonly property bool scanningActive: ((adapter && adapter.discovering) ? true : (root.ctlDiscovering === true)) || manualScanTimer.running
-
-  function init() {
-    Logger.i("Bluetooth", "Service started");
-  }
-
-  Component.onCompleted: {
-    // Prime state immediately so UI reflects correct power/discovery flags
-    pollCtlState();
-  }
-
-  // Note: We intentionally avoid creating or managing a custom BlueZ agent in-process.
-  // Pairing flows are delegated to `bluetoothctl` as needed to keep behavior
-  // consistent and reduce maintenance complexity.
-
-  // No implicit discovery auto-start; state polled from bluetoothctl instead
 
   // Track adapter state changes
   Connections {
     target: adapter
     function onStateChanged() {
-      if (!adapter) {
+      if (!adapter || adapter.state === BluetoothAdapter.Enabling || adapter.state === BluetoothAdapter.Disabling) {
         return;
       }
-      if (adapter.state === BluetoothAdapter.Enabling || adapter.state === BluetoothAdapter.Disabling) {
-        return;
-      }
-      Logger.i("Bluetooth", "Bluetooth state change command executed");
-      const bluetoothBlockedToggled = (root.blocked !== lastBluetoothBlocked);
-      root.lastBluetoothBlocked = root.blocked;
-      if (bluetoothBlockedToggled) {
-        checkWifiBlocked.running = true;
-      } else if (adapter.state === BluetoothAdapter.Enabled) {
-        ToastService.showNotice(I18n.tr("common.bluetooth"), I18n.tr("common.enabled"), "bluetooth");
-        Logger.d("Bluetooth", "Adapter enabled");
-      } else if (adapter.state === BluetoothAdapter.Disabled) {
-        ToastService.showNotice(I18n.tr("common.bluetooth"), I18n.tr("common.disabled"), "bluetooth-off");
-        Logger.d("Bluetooth", "Adapter disabled");
+      checkAirplaneMode();
+    }
+    function onEnabledChanged() {
+      if (adapter?.enabled && Settings.data.network.bluetoothAutoConnect) {
+        autoConnectTimer.restart();
       }
     }
   }
 
-  Process {
-    id: checkWifiBlocked
-    running: false
-    command: ["rfkill", "list", "wifi"]
-    stdout: StdioCollector {
-      onStreamFinished: {
-        var wifiBlocked = text && text.trim().indexOf("Soft blocked: yes") !== -1;
-        Logger.d("Network", "Wi-Fi adapter was detected as blocked:", wifiBlocked);
-        // Check if airplane mode has been toggled
-        if (wifiBlocked && root.blocked) {
-          root.airplaneModeToggled = true;
-          root.lastWifiBlocked = true;
-          NetworkService.setWifiEnabled(false);
-          ToastService.showNotice(I18n.tr("toast.airplane-mode.title"), I18n.tr("common.enabled"), "plane");
-        } else if (!wifiBlocked && lastWifiBlocked) {
-          root.airplaneModeToggled = true;
-          root.lastWifiBlocked = false;
-          NetworkService.setWifiEnabled(true);
-          ToastService.showNotice(I18n.tr("toast.airplane-mode.title"), I18n.tr("common.disabled"), "plane-off");
-        } else if (adapter.enabled) {
-          ToastService.showNotice(I18n.tr("common.bluetooth"), I18n.tr("common.enabled"), "bluetooth");
-          Logger.d("Bluetooth", "Adapter enabled");
-        } else {
-          ToastService.showNotice(I18n.tr("common.bluetooth"), I18n.tr("common.disabled"), "bluetooth-off");
-          Logger.d("Bluetooth", "Adapter disabled");
-        }
-        root.airplaneModeToggled = false;
-      }
-    }
-    stderr: StdioCollector {
-      onStreamFinished: {
-        if (text && text.trim()) {
-          Logger.w("Bluetooth", "rfkill (wifi) stderr:", text.trim());
-        }
+  Connections {
+    target: Settings.data.network
+    function onBluetoothAutoConnectChanged() {
+      if (Settings.data.network.bluetoothAutoConnect && adapter?.enabled) {
+        autoConnectTimer.restart();
+      } else {
+        autoConnectTimer.stop();
       }
     }
   }
 
-  // bluetoothctl state polling
-  Process {
-    id: ctlShowProcess
-    running: false
-    stdout: StdioCollector {
-      id: ctlStdout
-    }
-    onExited: function (exitCode, exitStatus) {
-      try {
-        var text = ctlStdout.text || "";
-        // Logger.e("Bluetooth", "ctlShowProcess exited. Output length: " + text.length);
-        // Parse Powered/Discoverable/Discovering lines
-        var mp = text.match(/\bPowered:\s*(yes|no)\b/i);
-        if (mp && mp.length > 1) {
-          root.ctlPowered = (mp[1].toLowerCase() === "yes");
-        }
-        var md = text.match(/\bDiscoverable:\s*(yes|no)\b/i);
-        if (md && md.length > 1) {
-          root.ctlDiscoverable = (md[1].toLowerCase() === "yes");
-        }
-        var ms = text.match(/\bDiscovering:\s*(yes|no)\b/i);
-        if (ms && ms.length > 1) {
-          var discovering = (ms[1].toLowerCase() === "yes");
-          //Logger.e("Bluetooth", "Parsed Discovering state from bluetoothctl: " + discovering + " (current ctlDiscovering: " + root.ctlDiscovering + ")");
-          root.ctlDiscovering = discovering;
-        }
-      } catch (e) {
-        Logger.d("Bluetooth", "Failed to parse bluetoothctl show output", e);
+  Component.onCompleted: {
+    Logger.i("Bluetooth", "Service started");
+    autoConnectTimer.restart();
+  }
+
+  Timer {
+    id: autoConnectTimer
+    interval: 1500
+    repeat: false
+    onTriggered: attemptAutoConnect()
+  }
+
+  Timer {
+    id: autoConnectStepTimer
+    interval: 500
+    repeat: false
+    onTriggered: {
+      var device = root._autoConnectQueue.shift();
+      if (device && device.paired && !device.connected && !device.blocked) {
+        Logger.i("Bluetooth", "Auto-connecting to:", device.name || device.deviceName);
+        connectDeviceWithTrust(device);
+      }
+      if (root._autoConnectQueue.length > 0) {
+        autoConnectStepTimer.restart();
       }
     }
   }
 
-  function pollCtlState() {
-    if (ctlShowProcess.running) {
-      return;
-    }
-    try {
-      ctlShowProcess.command = ["bluetoothctl", "show"];
-      ctlShowProcess.running = true;
-    } catch (_) {}
-  }
-
-  // Periodic state polling
   Timer {
     id: ctlPollTimer
-    interval: ctlPollMs
-    repeat: true
-    running: root.enabled
-    onTriggered: pollCtlState()
-  }
-
-  // Short-delay poll scheduler
-  Timer {
-    id: pollCtlStateSoonTimer
-    interval: ctlPollSoonMs
-    repeat: false
-    onTriggered: pollCtlState()
-  }
-
-  function requestCtlPoll(delayMs) {
-    pollCtlStateSoonTimer.interval = Math.max(50, delayMs || ctlPollSoonMs);
-    pollCtlStateSoonTimer.restart();
+    interval: 2000
+    running: false
+    onTriggered: {
+      if (!adapter || !ProgramCheckerService.bluetoothctlAvailable) {
+        return;
+      }
+      ctlPollProcess.running = true;
+    }
   }
 
   // Adapter power (enable/disable) via bluetoothctl
   function setBluetoothEnabled(state) {
-    Logger.i("Bluetooth", "SetBluetoothEnabled", state);
+    if (!adapter) {
+      Logger.d("Bluetooth", "Enable/Disable skipped: no adapter");
+      return;
+    }
     try {
-      btExec(["bluetoothctl", "power", state ? "on" : "off"]);
-      root.ctlPowered = !!state;
-      requestCtlPoll(ctlPollSoonMs);
+      adapter.enabled = state;
+      Logger.i("Bluetooth", "SetBluetoothEnabled", state);
     } catch (e) {
       Logger.w("Bluetooth", "Enable/Disable failed", e);
       ToastService.showWarning(I18n.tr("common.bluetooth"), I18n.tr("toast.bluetooth.state-change-failed"));
     }
   }
 
+  // Check if airplane mode has been toggled
+  function checkAirplaneMode() {
+    var isAirplaneModeActive = !NetworkService.wifiEnabled && adapter.state === BluetoothAdapter.Blocked;
+    if (isAirplaneModeActive && !NetworkService.airplaneModeEnabled) {
+      NetworkService.airplaneModeToggled = true;
+      NetworkService.airplaneModeEnabled = true;
+      ToastService.showNotice(I18n.tr("toast.airplane-mode.title"), I18n.tr("common.enabled"), "plane");
+      Logger.i("AirplaneMode", "Enabled");
+    } else if (!isAirplaneModeActive && NetworkService.airplaneModeEnabled) {
+      NetworkService.airplaneModeToggled = true;
+      NetworkService.airplaneModeEnabled = false;
+      ToastService.showNotice(I18n.tr("toast.airplane-mode.title"), I18n.tr("common.disabled"), "plane-off");
+      Logger.i("AirplaneMode", "Disabled");
+    } else if (adapter.enabled) {
+      ToastService.showNotice(I18n.tr("common.bluetooth"), I18n.tr("common.enabled"), "bluetooth");
+      Logger.d("Bluetooth", "Adapter enabled");
+    } else {
+      ToastService.showNotice(I18n.tr("common.bluetooth"), I18n.tr("common.disabled"), "bluetooth-off");
+      Logger.d("Bluetooth", "Adapter disabled");
+    }
+  }
+
+  // Unify discovery controls
+  function setScanActive(active) {
+    if (!adapter) {
+      Logger.d("Bluetooth", "Scan request ignored: adapter unavailable");
+      return;
+    }
+    try {
+      if (active || adapter.discovering) { // Only attempt to set if activating, or if deactivating and currently currently discovering
+        adapter.discovering = active;
+      }
+    } catch (e) {
+      Logger.e("Bluetooth", "setScanActive failed", e);
+    }
+  }
+
   // Toggle adapter discoverability (advertising visibility) via bluetoothctl
   function setDiscoverable(state) {
+    if (!adapter) {
+      Logger.d("Bluetooth", "Discoverable change skipped: no adapter");
+      return;
+    }
     try {
-      btExec(["bluetoothctl", "discoverable", state ? "on" : "off"]);
-      root.ctlDiscoverable = !!state; // optimistic
-      requestCtlPoll(ctlPollSoonMs);
-      if (state) {
-        ToastService.showNotice(I18n.tr("common.bluetooth"), I18n.tr("toast.bluetooth.discoverable-enabled"), "broadcast");
-      } else {
-        ToastService.showNotice(I18n.tr("common.bluetooth"), I18n.tr("toast.bluetooth.discoverable-disabled"), "broadcast-off");
-      }
+      adapter.discoverable = state;
       Logger.i("Bluetooth", "Discoverable state set to:", state);
     } catch (e) {
       Logger.w("Bluetooth", "Failed to change discoverable state", e);
@@ -406,15 +245,6 @@ Singleton {
     if (!device) {
       return false;
     }
-
-    /*
-    Paired
-    Means you’ve successfully exchanged keys with the device.
-    The devices remember each other and can authenticate without repeating the pairing process.
-    Example: once your headphones are paired, you don’t need to type a PIN every time.
-    Hence, instead of !device.paired, should be device.connected
-    */
-    // Only allow connect if device is already paired or trusted
     return !device.connected && (device.paired || device.trusted) && !device.pairing && !device.blocked;
   }
 
@@ -424,37 +254,25 @@ Singleton {
     }
     return device.connected && !device.pairing && !device.blocked;
   }
-  // Status string for a device (translated)
-  function getStatusString(device) {
-    if (!device) {
-      return "";
-    }
-    try {
-      if (device.pairing)
-        return I18n.tr("common.pairing");
-      if (device.blocked)
-        return I18n.tr("bluetooth.panel.blocked");
-      if (device.state === BluetoothDevice.Connecting)
-        return I18n.tr("common.connecting");
-      if (device.state === BluetoothDevice.Disconnecting)
-        return I18n.tr("common.disconnecting");
-    } catch (_) {}
-    return "";
-  }
 
   // Textual signal quality (translated)
   function getSignalStrength(device) {
     var p = getSignalPercent(device);
-    if (p === null)
+    if (p === null) {
       return I18n.tr("bluetooth.panel.signal-text-unknown");
-    if (p >= 80)
+    }
+    if (p >= 80) {
       return I18n.tr("bluetooth.panel.signal-text-excellent");
-    if (p >= 60)
+    }
+    if (p >= 60) {
       return I18n.tr("bluetooth.panel.signal-text-good");
-    if (p >= 40)
+    }
+    if (p >= 40) {
       return I18n.tr("bluetooth.panel.signal-text-fair");
-    if (p >= 20)
+    }
+    if (p >= 20) {
       return I18n.tr("bluetooth.panel.signal-text-poor");
+    }
     return I18n.tr("bluetooth.panel.signal-text-very-poor");
   }
 
@@ -478,7 +296,6 @@ Singleton {
     if (!device) {
       return false;
     }
-
     return device.pairing || device.state === BluetoothDevice.Disconnecting || device.state === BluetoothDevice.Connecting;
   }
 
@@ -506,7 +323,6 @@ Singleton {
       return;
     }
     ToastService.showNotice(I18n.tr("common.bluetooth"), I18n.tr("common.pairing"), "bluetooth");
-    // Delegate pairing to bluetoothctl which registers/uses its own agent
     try {
       pairWithBluetoothctl(device);
     } catch (e) {
@@ -514,9 +330,6 @@ Singleton {
       ToastService.showWarning(I18n.tr("common.bluetooth"), I18n.tr("toast.bluetooth.pair-failed"));
     }
   }
-
-  // Interaction state
-  property bool pinRequired: false
 
   function submitPin(pin) {
     if (pairingProcess.running) {
@@ -527,34 +340,9 @@ Singleton {
 
   function cancelPairing() {
     if (pairingProcess.running) {
-      pairingProcess.kill();
+      pairingProcess.running = false;
     }
     root.pinRequired = false;
-  }
-
-  // Interactive pairing process
-  Process {
-    id: pairingProcess
-    stdout: SplitParser {
-      onRead: data => {
-        var chunk = data;
-        if (chunk.indexOf("[PIN_REQ]") !== -1) {
-          root.pinRequired = true;
-          Logger.i("Bluetooth", "PIN required for pairing");
-          ToastService.showNotice(I18n.tr("common.bluetooth"), I18n.tr("bluetooth.panel.pin-required"), "lock");
-        }
-      }
-    }
-    stderr: StdioCollector {}
-    onExited: {
-      root.pinRequired = false;
-      Logger.i("Bluetooth", "Pairing process exited.");
-      // Restore discovery if we paused it
-      if (root._discoveryWasRunning) {
-        root.setScanActive(true, 0);
-      }
-      root._discoveryWasRunning = false;
-    }
   }
 
   // Pair using bluetoothctl which registers its own BlueZ agent internally.
@@ -570,24 +358,23 @@ Singleton {
 
     Logger.i("Bluetooth", "pairWithBluetoothctl", addr);
 
-    // Stop any previous pairing attempt
     if (pairingProcess.running) {
-      pairingProcess.kill();
+      pairingProcess.running = false;
     }
     root.pinRequired = false;
 
-    // Compute bounded waits from tunables
     const pairWait = Math.max(5, Number(root.pairWaitSeconds) | 0);
     const attempts = Math.max(1, Number(root.connectAttempts) | 0);
     const intervalMs = Math.max(500, Number(root.connectRetryIntervalMs) | 0);
     const intervalSec = Math.max(1, Math.round(intervalMs / 1000));
 
-    // Pause discovery during pair/connect to avoid interference
-    const totalPauseMs = (pairWait * 1000) + (attempts * intervalSec * 1000) + 2000;
-    _pauseDiscoveryFor(totalPauseMs);
+    // Temporarily pause discovery during pair/connect to reduce HCI churn
+    root._discoveryWasRunning = root.scanningActive;
+    if (root.scanningActive) {
+      root.setScanActive(false);
+    }
 
-    const scriptPath = Quickshell.shellDir + "/Scripts/python/src/network/bluetooth-connect.py";
-
+    const scriptPath = Quickshell.shellDir + "/Scripts/python/src/network/bluetooth-pair.py";
     pairingProcess.command = ["python3", scriptPath, String(addr), String(pairWait), String(attempts), String(intervalSec)];
     pairingProcess.running = true;
   }
@@ -620,8 +407,46 @@ Singleton {
   }
 
   function unpairDevice(device) {
-    // Alias to forgetDevice for clarity in UI
     forgetDevice(device);
+  }
+
+  function getDeviceAutoConnect(device) {
+    if (!device || !device.address || !cacheAdapter.autoConnectSettings) {
+      return false;
+    }
+    const mac = device.address;
+    const settings = cacheAdapter.autoConnectSettings[mac];
+    return settings ? !!settings.autoConnect : false;
+  }
+
+  function setDeviceAutoConnect(device, enabled) {
+    if (!device || !device.address) {
+      return;
+    }
+    const mac = device.address;
+    let settings = cacheAdapter.autoConnectSettings || ({});
+    if (enabled) {
+      settings[mac] = {
+        autoConnect: true,
+        deviceName: device.name || device.deviceName || ""
+      };
+    } else {
+      delete settings[mac];
+    }
+    cacheAdapter.autoConnectSettings = settings;
+    cacheFileView.writeAdapter();
+  }
+
+  function attemptAutoConnect() {
+    if (NetworkService.airplaneModeEnabled || !adapter || !adapter.enabled || !Settings.data.network.bluetoothAutoConnect) {
+      return;
+    }
+
+    _autoConnectQueue = adapter.devices.values.filter(dev => dev && dev.paired && !dev.connected && !dev.blocked && getDeviceAutoConnect(dev) === true);
+
+    if (root._autoConnectQueue.length > 0) {
+      autoConnectStepTimer.restart();
+    }
   }
 
   function connectDeviceWithTrust(device) {
@@ -660,5 +485,57 @@ Singleton {
       Logger.w("Bluetooth", "forgetDevice failed", e);
       ToastService.showWarning(I18n.tr("common.bluetooth"), I18n.tr("toast.bluetooth.forget-failed"));
     }
+  }
+
+  // Poll Bluetooth power state with bluetoothctl to handle a Quickshell bug on resume after suspend
+  Process {
+    id: ctlPollProcess
+    command: ["bluetoothctl", "show"]
+    running: false
+    stdout: StdioCollector {
+      onStreamFinished: {
+        var powered = false;
+        var mp = text.match(/\bPowered:\s*(yes|no)\b/i);
+        if (mp) {
+          powered = mp[1].toLowerCase() === 'yes';
+        }
+        if (adapter.enabled !== powered) {
+          adapter.enabled = powered;
+        }
+      }
+    }
+    stderr: StdioCollector {
+      onStreamFinished: {
+        if (text.trim()) {
+          Logger.d("Bluetooth", "Failed to parse bluetoothctl show output" + text);
+        }
+      }
+    }
+  }
+
+  // Interactive pairing process
+  Process {
+    id: pairingProcess
+    stdout: SplitParser {
+      onRead: data => {
+        Logger.d("Bluetooth", data);
+        if (data.indexOf("PIN_REQUIRED") !== -1) {
+          root.pinRequired = true;
+          Logger.i("Bluetooth", "PIN required for pairing");
+        }
+      }
+    }
+    onExited: {
+      root.pinRequired = false;
+      Logger.i("Bluetooth", "Pairing process exited.");
+      // Restore discovery if we paused it
+      if (root._discoveryWasRunning) {
+        root.setScanActive(true);
+      }
+      root._discoveryWasRunning = false;
+    }
+    environment: ({
+                    "LC_ALL": "C"
+                  })
   }
 }

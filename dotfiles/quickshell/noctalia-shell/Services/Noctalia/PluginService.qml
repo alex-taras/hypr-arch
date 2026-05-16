@@ -43,15 +43,12 @@ Singleton {
   property var pluginErrors: ({})
   signal pluginLoadError(string pluginId, string entryPoint, string error)
 
+  // Track currently installing plugins: { pluginId: true }
+  property var installingPlugins: ({})
+
   // Hot reload: file watchers for plugin directories
   property var pluginFileWatchers: ({}) // { pluginId: FileView }
-  property bool hotReloadEnabled: Settings.isDebug
-
-  onHotReloadEnabledChanged: {
-    if (root.initialized) {
-      setHotReloadEnabled(root.hotReloadEnabled);
-    }
-  }
+  property list<string> pluginHotReloadEnabled: [] // List of pluginIds that have hot reload enabled
 
   // Track active fetches
   property var activeFetches: ({})
@@ -95,6 +92,23 @@ Singleton {
     }
   }
 
+  // When debug mode is disabled, tear down all hot reload watchers
+  Connections {
+    target: Settings
+
+    function onIsDebugChanged() {
+      if (!Settings.isDebug && root.pluginHotReloadEnabled.length > 0) {
+        Logger.i("PluginService", "Debug mode disabled, removing all hot reload watchers");
+        // Remove watchers for all hot-reload-enabled plugins
+        var plugins = root.pluginHotReloadEnabled.slice(); // copy since we mutate
+        for (var i = 0; i < plugins.length; i++) {
+          removePluginFileWatcher(plugins[i]);
+        }
+        root.pluginHotReloadEnabled = [];
+      }
+    }
+  }
+
   // Listen for language changes to reload plugin translations
   Connections {
     target: I18n
@@ -113,11 +127,27 @@ Singleton {
             // Reload translations
             loadPluginTranslationsAsync(id, plugin.manifest, I18n.langCode, function (translations) {
               plugin.api.pluginTranslations = translations;
-              plugin.api.translationVersion++;
-              Logger.d("PluginService", "Reloaded translations for plugin:", id);
+
+              // Reload English fallback for non-English languages
+              if (I18n.langCode !== "en") {
+                loadPluginTranslationsAsync(id, plugin.manifest, "en", function (fallbackTranslations) {
+                  plugin.api.pluginFallbackTranslations = fallbackTranslations;
+                  plugin.api.translationVersion++;
+                  Logger.d("PluginService", "Reloaded translations for plugin:", id);
+                });
+              } else {
+                plugin.api.pluginFallbackTranslations = {};
+                plugin.api.translationVersion++;
+                Logger.d("PluginService", "Reloaded translations for plugin:", id);
+              }
             });
           }
         })(pluginId, root.loadedPlugins[pluginId]);
+      }
+
+      // Update translation file watchers to watch the new language's files
+      if (root.pluginHotReloadEnabled.length > 0) {
+        updateTranslationWatchers();
       }
     }
   }
@@ -185,6 +215,7 @@ Singleton {
       root.pluginsFullyLoaded = true;
       Logger.i("PluginService", "No plugins to load");
       root.allPluginsLoaded();
+      root._isStartupCheck = true;
       refreshAvailablePlugins();
       return;
     }
@@ -210,6 +241,7 @@ Singleton {
       root.allPluginsLoaded();
 
       // Fetch available plugins from all sources
+      root._isStartupCheck = true;
       refreshAvailablePlugins();
     }
   }
@@ -364,6 +396,12 @@ Singleton {
   // skipCollisionCheck: set to true when updating an existing plugin
   function installPlugin(pluginMetadata, skipCollisionCheck, callback) {
     var pluginId = pluginMetadata.id;
+    // Do not include hash for 3rd party plugins
+    var pluginIdRegex = /^[a-f0-9]{6}:/;
+    if (pluginIdRegex.test(pluginId)) {
+      pluginId = pluginId.substring(7);
+    }
+
     var source = pluginMetadata.source;
 
     // Check for collision first (skip when updating)
@@ -403,12 +441,22 @@ Singleton {
     // Use git sparse-checkout to clone only the plugin subfolder
     // GIT_TERMINAL_PROMPT=0 prevents hanging on private repos that need auth
     // Note: We download from the original pluginId folder in the repo, but save to compositeKey folder
-    var downloadCmd = "temp_dir=$(mktemp -d) && GIT_TERMINAL_PROMPT=0 git clone --filter=blob:none --sparse --depth=1 --quiet '" + repoUrl + "' \"$temp_dir\" 2>/dev/null && cd \"$temp_dir\" && git sparse-checkout set '" + pluginId + "' 2>/dev/null && mkdir -p '" + pluginDir + "' && cp -r \"$temp_dir/" + pluginId + "/.\" '" + pluginDir
-        + "/'; exit_code=$?; rm -rf \"$temp_dir\"; exit $exit_code";
+    var downloadCmd = "temp_dir=$(mktemp -d) && GIT_TERMINAL_PROMPT=0 git clone --filter=blob:none --sparse --depth=1 --quiet '" + repoUrl + "' \"$temp_dir\" 2>/dev/null && cd \"$temp_dir\" && git sparse-checkout set '" + pluginId + "' 2>/dev/null && mkdir -p '" + pluginDir + "' && rm -f \"$temp_dir/" + pluginId + "/settings.json\" && cp -r \"$temp_dir/" + pluginId
+        + "/.\" '" + pluginDir + "/'; exit_code=$?; rm -rf \"$temp_dir\"; exit $exit_code";
+
+    // Mark as installing
+    var newInstalling = Object.assign({}, root.installingPlugins);
+    newInstalling[pluginId] = true;
+    root.installingPlugins = newInstalling;
 
     var downloadProcess = Qt.createQmlObject('import QtQuick; import Quickshell.Io; Process { command: ["sh", "-c", "' + downloadCmd.replace(/"/g, '\\"') + '"] }', root, "DownloadPlugin_" + pluginId);
 
     downloadProcess.exited.connect(function (exitCode) {
+      // Mark as finished (remove from installing)
+      var currentInstalling = Object.assign({}, root.installingPlugins);
+      delete currentInstalling[pluginId];
+      root.installingPlugins = currentInstalling;
+
       if (exitCode === 0) {
         Logger.i("PluginService", "Downloaded plugin:", compositeKey);
 
@@ -517,7 +565,7 @@ Singleton {
       var manifest = PluginRegistry.getPluginManifest(compositeKey);
       if (manifest && manifest.entryPoints && manifest.entryPoints.barWidget) {
         var widgetId = "plugin:" + compositeKey;
-        addWidgetToBar(widgetId, "right"); // Default to right section
+        addWidgetToBar(widgetId, "right");
       }
     }
 
@@ -527,14 +575,15 @@ Singleton {
                               enabled: true
                             });
     root.pluginEnabled(compositeKey);
+
     return true;
   }
 
-  // Helper function to add a widget to the bar
+  // Helper function to add a widget to the bar (global + all screen overrides)
   function addWidgetToBar(widgetId, section) {
     section = section || "right"; // Default to right section
 
-    // Check if widget already exists in any section
+    // Check if widget already exists in any section (global)
     var sections = ["left", "center", "right"];
     for (var s = 0; s < sections.length; s++) {
       var widgets = Settings.data.bar.widgets[sections[s]] || [];
@@ -546,12 +595,41 @@ Singleton {
       }
     }
 
-    // Add to specified section
-    var widgets = Settings.data.bar.widgets[section] || [];
-    widgets.push({
-                   id: widgetId
-                 });
-    Settings.data.bar.widgets[section] = widgets;
+    // Add to global
+    var globalWidgets = Settings.data.bar.widgets[section] || [];
+    globalWidgets.push({
+                         id: widgetId
+                       });
+    Settings.data.bar.widgets[section] = globalWidgets;
+
+    // Also add to any screen overrides that have widget configurations
+    var overrides = Settings.data.bar.screenOverrides || [];
+    for (var o = 0; o < overrides.length; o++) {
+      if (overrides[o] && overrides[o].widgets) {
+        var overrideWidgets = overrides[o].widgets;
+        var sectionWidgets = overrideWidgets[section] || [];
+        // Check if widget already exists in this override
+        var alreadyExists = false;
+        for (var j = 0; j < sections.length; j++) {
+          var owSec = overrideWidgets[sections[j]] || [];
+          for (var k = 0; k < owSec.length; k++) {
+            if (owSec[k].id === widgetId) {
+              alreadyExists = true;
+              break;
+            }
+          }
+          if (alreadyExists)
+            break;
+        }
+        if (!alreadyExists) {
+          sectionWidgets.push({
+                                id: widgetId
+                              });
+          overrideWidgets[section] = sectionWidgets;
+          Settings.setScreenOverride(overrides[o].name, "widgets", overrideWidgets);
+        }
+      }
+    }
 
     Logger.i("PluginService", "Added widget", widgetId, "to bar section:", section);
     return true;
@@ -580,11 +658,12 @@ Singleton {
     return true;
   }
 
-  // Helper function to remove a widget from all bar sections
+  // Helper function to remove a widget from all bar sections (global + screen overrides)
   function removeWidgetFromBar(widgetId) {
     var sections = ["left", "center", "right"];
     var changed = false;
 
+    // Remove from global
     for (var s = 0; s < sections.length; s++) {
       var section = sections[s];
       var widgets = Settings.data.bar.widgets[section] || [];
@@ -602,6 +681,40 @@ Singleton {
       if (changed) {
         Settings.data.bar.widgets[section] = newWidgets;
       }
+    }
+
+    // Also remove from any screen overrides that have widget configurations
+    var overrides = Settings.data.bar.screenOverrides || [];
+    for (var o = 0; o < overrides.length; o++) {
+      if (overrides[o] && overrides[o].widgets) {
+        var overrideWidgets = overrides[o].widgets;
+        var overrideChanged = false;
+        for (var s2 = 0; s2 < sections.length; s2++) {
+          var sec = sections[s2];
+          var owWidgets = overrideWidgets[sec] || [];
+          var owNew = [];
+          for (var j = 0; j < owWidgets.length; j++) {
+            if (owWidgets[j].id !== widgetId) {
+              owNew.push(owWidgets[j]);
+            } else {
+              overrideChanged = true;
+              changed = true;
+              Logger.i("PluginService", "Removed widget", widgetId, "from screen override:", overrides[o].name, "section:", sec);
+            }
+          }
+          if (overrideChanged) {
+            overrideWidgets[sec] = owNew;
+          }
+        }
+        if (overrideChanged) {
+          Settings.setScreenOverride(overrides[o].name, "widgets", overrideWidgets);
+        }
+      }
+    }
+
+    // Signal the bar to refresh if widgets were removed
+    if (changed) {
+      BarService.widgetsRevision++;
     }
 
     return changed;
@@ -646,8 +759,14 @@ Singleton {
     loadPluginSettings(pluginId, function (settings) {
       // Then load translations
       loadPluginTranslationsAsync(pluginId, manifest, I18n.langCode, function (translations) {
-        // Both ready - call back with complete data
-        callback(settings, translations);
+        // Load English fallback for non-English languages
+        if (I18n.langCode !== "en") {
+          loadPluginTranslationsAsync(pluginId, manifest, "en", function (fallbackTranslations) {
+            callback(settings, translations, fallbackTranslations);
+          });
+        } else {
+          callback(settings, translations, {});
+        }
       });
     });
   }
@@ -670,9 +789,9 @@ Singleton {
     Logger.i("PluginService", "Loading plugin:", pluginId);
 
     // Load settings and translations FIRST, then create API and instantiate components
-    loadPluginData(pluginId, manifest, function (settings, translations) {
+    loadPluginData(pluginId, manifest, function (settings, translations, fallbackTranslations) {
       // Create plugin API object with pre-loaded data
-      var pluginApi = createPluginAPI(pluginId, manifest, settings, translations);
+      var pluginApi = createPluginAPI(pluginId, manifest, settings, translations, fallbackTranslations);
 
       // Initialize plugin entry with API and manifest
       root.loadedPlugins[pluginId] = {
@@ -730,6 +849,9 @@ Singleton {
           // Register with BarWidgetRegistry
           BarWidgetRegistry.registerPluginWidget(pluginId, widgetComponent, manifest.metadata);
           Logger.i("PluginService", "Loaded bar widget for plugin:", pluginId);
+
+          // Now that the widget is registered, bump widgetsRevision so the bar can render it
+          BarService.widgetsRevision++;
         } else if (widgetComponent.status === Component.Error) {
           root.recordPluginError(pluginId, "barWidget", widgetComponent.errorString());
         }
@@ -849,7 +971,7 @@ Singleton {
   }
 
   // Create plugin API object with pre-loaded settings and translations
-  function createPluginAPI(pluginId, manifest, settings, translations) {
+  function createPluginAPI(pluginId, manifest, settings, translations, fallbackTranslations) {
     var pluginDir = PluginRegistry.getPluginDir(pluginId);
 
     var api = Qt.createQmlObject(`
@@ -877,6 +999,7 @@ Singleton {
 
         // Translation storage
         property var pluginTranslations: ({})
+        property var pluginFallbackTranslations: ({})  // English fallback for missing keys
         property string currentLanguage: ""
         property int translationVersion: 0  // Increments when translations change - plugins should depend on this
 
@@ -885,6 +1008,9 @@ Singleton {
         property var openPanel: null
         property var closePanel: null
         property var togglePanel: null
+        property var openLauncher: null
+        property var closeLauncher: null
+        property var toggleLauncher: null
         property var withCurrentScreen: null
         property var tr: null
         property var trp: null
@@ -898,9 +1024,11 @@ Singleton {
     // Set current language (can't use binding in Qt.createQmlObject string)
     api.currentLanguage = I18n.langCode;
 
-    // Set pre-loaded settings and translations (available immediately!)
-    api.pluginSettings = settings || {};
+    // Merge manifest defaults with loaded settings (user settings take priority)
+    var defaults = (manifest.metadata && manifest.metadata.defaultSettings) || {};
+    api.pluginSettings = Object.assign({}, defaults, settings || {});
     api.pluginTranslations = translations || {};
+    api.pluginFallbackTranslations = fallbackTranslations || {};
 
     // ----------------------------------------
     // Helper function to get nested property by dot notation
@@ -964,6 +1092,53 @@ Singleton {
     };
 
     // ----------------------------------------
+    // Launcher provider methods
+    // ----------------------------------------
+
+    // Get the search prefix for this plugin's launcher provider
+    var getSearchPrefix = function () {
+      var metadata = LauncherProviderRegistry.getProviderMetadata("plugin:" + pluginId);
+      var prefix = (metadata && metadata.commandPrefix) ? metadata.commandPrefix : pluginId;
+      return ">" + prefix + " ";
+    };
+
+    api.openLauncher = function (screen) {
+      // Open the launcher with this plugin's provider active
+      if (!screen) {
+        Logger.w("PluginAPI", "No screen available for opening launcher");
+        return;
+      }
+      PanelService.openLauncherWithSearch(screen, getSearchPrefix());
+    };
+
+    api.closeLauncher = function (screen) {
+      // Close the launcher
+      if (!screen) {
+        Logger.w("PluginAPI", "No screen available for closing launcher");
+        return;
+      }
+      PanelService.closeLauncher(screen);
+    };
+
+    api.toggleLauncher = function (screen) {
+      // Toggle the launcher with this plugin's provider active
+      if (!screen) {
+        Logger.w("PluginAPI", "No screen available for toggling launcher");
+        return;
+      }
+      var searchPrefix = getSearchPrefix();
+      var searchText = PanelService.getLauncherSearchText(screen);
+      var isInThisMode = searchText.startsWith(searchPrefix);
+      if (!PanelService.isLauncherOpen(screen)) {
+        PanelService.openLauncherWithSearch(screen, searchPrefix);
+      } else if (isInThisMode) {
+        PanelService.closeLauncher(screen);
+      } else {
+        PanelService.setLauncherSearchText(screen, searchPrefix);
+      }
+    };
+
+    // ----------------------------------------
     api.withCurrentScreen = function (callback) {
       // Detect which screen the cursor is on and call callback with that screen
       if (!root.screenDetector) {
@@ -983,7 +1158,12 @@ Singleton {
 
       var translation = getNestedProperty(api.pluginTranslations, key);
 
-      // Return formatted key if translation not found
+      // Fallback to English if not found in current language
+      if (translation === undefined || translation === null || typeof translation !== 'string') {
+        translation = getNestedProperty(api.pluginFallbackTranslations, key);
+      }
+
+      // Return formatted key if translation not found in any language
       if (translation === undefined || translation === null) {
         return `!!${key}!!`;
       }
@@ -1028,7 +1208,7 @@ Singleton {
     // ----------------------------------------
     // Check if translation exists
     api.hasTranslation = function (key) {
-      return getNestedProperty(api.pluginTranslations, key) !== undefined;
+      return getNestedProperty(api.pluginTranslations, key) !== undefined || getNestedProperty(api.pluginFallbackTranslations, key) !== undefined;
     };
 
     return api;
@@ -1173,9 +1353,13 @@ Singleton {
   }
 
   // Find available plugin by ID
-  function findAvailablePlugin(pluginId) {
+  function findAvailablePlugin(compositeKeyOrId) {
+    var parsed = PluginRegistry.parseCompositeKey(compositeKeyOrId);
+    var pluginId = parsed.pluginId;
+    var sourceUrl = PluginRegistry.getPluginSourceUrl(compositeKeyOrId);
+
     for (var i = 0; i < root.availablePlugins.length; i++) {
-      if (root.availablePlugins[i].id === pluginId) {
+      if (root.availablePlugins[i].id === pluginId && root.availablePlugins[i].source.url === sourceUrl) {
         return root.availablePlugins[i];
       }
     }
@@ -1184,6 +1368,9 @@ Singleton {
 
   // Internal flag to track if we should check for updates after registry fetch
   property bool shouldCheckUpdatesAfterFetch: false
+
+  // Flag to track if this is the initial startup update check (for auto-update)
+  property bool _isStartupCheck: false
 
   // Check for plugin updates (call this after availablePlugins are loaded)
   function checkForUpdates() {
@@ -1265,32 +1452,69 @@ Singleton {
 
     if (updateCount > 0) {
       Logger.i("PluginService", updateCount, "plugin update(s) available");
-      ToastService.showNotice(I18n.tr("panels.plugins.title"), I18n.trp("panels.plugins.update-available", updateCount) + "\n\n" + updatesDescription, "plugin", 5000, I18n.tr("panels.plugins.open-plugins-tab"), function () {
-        // Open settings panel to Plugins tab on the screen where the cursor is
-        if (root.screenDetector) {
-          root.screenDetector.withCurrentScreen(function (screen) {
-            var panel = PanelService.getPanel("settingsPanel", screen);
+
+      if (Settings.data.plugins.notifyUpdates) {
+        ToastService.showNotice(I18n.tr("panels.plugins.title"), I18n.trp("panels.plugins.update-available", updateCount) + "\n\n" + updatesDescription, "plugin", 5000, I18n.tr("panels.plugins.open-plugins-tab"), function () {
+          // Open settings panel to Plugins tab on the screen where the cursor is
+          if (root.screenDetector) {
+            root.screenDetector.withCurrentScreen(function (screen) {
+              var panel = PanelService.getPanel("settingsPanel", screen);
+              if (panel) {
+                panel.requestedTab = SettingsPanel.Tab.Plugins;
+                panel.open();
+              }
+            });
+          } else {
+            // Fallback to primary screen if screen detector is not available
+            var panel = PanelService.getPanel("settingsPanel", Quickshell.screens[0]);
             if (panel) {
               panel.requestedTab = SettingsPanel.Tab.Plugins;
               panel.open();
             }
-          });
-        } else {
-          // Fallback to primary screen if screen detector is not available
-          var panel = PanelService.getPanel("settingsPanel", Quickshell.screens[0]);
-          if (panel) {
-            panel.requestedTab = SettingsPanel.Tab.Plugins;
-            panel.open();
           }
-        }
-      });
+        });
+      }
     } else if (pendingCount > 0) {
       Logger.i("PluginService", pendingCount, "plugin update(s) pending (require newer Noctalia)");
     } else {
       Logger.i("PluginService", "All installed plugins are up to date");
     }
 
+    // Auto-update on startup if enabled
+    if (root._isStartupCheck && Settings.data.plugins.autoUpdate && updateCount > 0) {
+      Logger.i("PluginService", "Auto-updating", updateCount, "plugin(s)");
+      updateAllPlugins();
+    }
+
+    root._isStartupCheck = false;
     shouldCheckUpdatesAfterFetch = false;
+  }
+
+  // Update all plugins sequentially
+  function updateAllPlugins(callback) {
+    var pluginIds = Object.keys(root.pluginUpdates);
+    var currentIndex = 0;
+
+    function updateNext() {
+      if (currentIndex >= pluginIds.length) {
+        ToastService.showNotice(I18n.tr("panels.plugins.title"), I18n.tr("panels.plugins.update-all-success"));
+        if (callback)
+          callback();
+        return;
+      }
+
+      var pluginId = pluginIds[currentIndex];
+      currentIndex++;
+
+      root.updatePlugin(pluginId, function (success, error) {
+        if (!success) {
+          Logger.w("PluginService", "Failed to auto-update", pluginId + ":", error);
+        }
+        Qt.callLater(updateNext);
+      });
+    }
+
+    updateNext();
   }
 
   // Simple version comparison (semantic versioning x.y.z)
@@ -1332,13 +1556,14 @@ Singleton {
       Logger.d("PluginService", "Plugin requires Noctalia v" + availablePlugin.minNoctaliaVersion);
     }
 
-    // Backup entire bar layout
+    // Backup entire bar layout (global + screen overrides)
     var barBackup = {
       left: JSON.parse(JSON.stringify(Settings.data.bar.widgets.left || [])),
       center: JSON.parse(JSON.stringify(Settings.data.bar.widgets.center || [])),
       right: JSON.parse(JSON.stringify(Settings.data.bar.widgets.right || []))
     };
-    Logger.d("PluginService", "Backed up bar layout");
+    var screenOverridesBackup = JSON.parse(JSON.stringify(Settings.data.bar.screenOverrides || []));
+    Logger.d("PluginService", "Backed up bar layout (global + screen overrides)");
 
     // Backup desktop widget settings (includes this plugin's widgets)
     var desktopWidgetsBackup = JSON.parse(JSON.stringify(Settings.data.desktopWidgets.monitorWidgets || []));
@@ -1378,11 +1603,16 @@ Singleton {
         Settings.data.bar.widgets.left = barBackup.left;
         Settings.data.bar.widgets.center = barBackup.center;
         Settings.data.bar.widgets.right = barBackup.right;
-        Logger.d("PluginService", "Restored bar layout");
+        Settings.data.bar.screenOverrides = screenOverridesBackup;
+        Logger.d("PluginService", "Restored bar layout (global + screen overrides)");
 
         // Restore desktop widget settings
         Settings.data.desktopWidgets.monitorWidgets = desktopWidgetsBackup;
         Logger.d("PluginService", "Restored desktop widget settings");
+
+        // Persist restored layout immediately to prevent race with file watcher reload
+        // (the earlier disablePlugin write triggers a reload that can overwrite the restore)
+        Settings.saveImmediate();
 
         // Remove from updates list
         var updates = Object.assign({}, root.pluginUpdates);
@@ -1394,13 +1624,15 @@ Singleton {
       } else {
         Logger.e("PluginService", "Failed to update plugin:", pluginId, error);
 
-        // Restore bar layout even on failure
+        // Restore bar layout even on failure (global + screen overrides)
         Settings.data.bar.widgets.left = barBackup.left;
         Settings.data.bar.widgets.center = barBackup.center;
         Settings.data.bar.widgets.right = barBackup.right;
+        Settings.data.bar.screenOverrides = screenOverridesBackup;
 
         // Restore desktop widget settings even on failure
         Settings.data.desktopWidgets.monitorWidgets = desktopWidgetsBackup;
+        Settings.saveImmediate();
 
         if (callback)
           callback(false, error);
@@ -1432,7 +1664,9 @@ Singleton {
     }
 
     // Try to find the plugin panel slot (pluginPanel1 or pluginPanel2)
-    // Try slot 1 first, then slot 2
+    // Priority: 1) toggle same plugin, 2) empty slot, 3) closed slot, 4) replace open slot
+    var closedSlot = null;
+
     for (var slotNum = 1; slotNum <= 2; slotNum++) {
       var panelName = "pluginPanel" + slotNum;
       var panel = PanelService.getPanel(panelName, screen);
@@ -1446,22 +1680,38 @@ Singleton {
 
         // If this slot is empty, use it
         if (panel.currentPluginId === "") {
-          // Set the pluginId first - when panel opens and panelContent loads,
-          // Component.onCompleted will call loadPluginPanel automatically
           panel.currentPluginId = pluginId;
           panel.open(buttonItem);
           return true;
         }
+
+        // Track first closed slot (panel assigned but not showing)
+        if (!closedSlot && !panel.isPanelOpen) {
+          closedSlot = panel;
+        }
       }
     }
 
-    // If both slots are occupied, use slot 1 (replace existing)
+    // Prefer reusing a closed slot over replacing an open one
+    if (closedSlot) {
+      closedSlot.currentPluginId = pluginId;
+      closedSlot.open(buttonItem);
+      return true;
+    }
+
+    // If both slots are occupied and open, use slot 1 (replace existing)
     var panel1 = PanelService.getPanel("pluginPanel1", screen);
     if (panel1) {
+      var wasAlreadyOpen = panel1.isPanelOpen;
       panel1.unloadPluginPanel();
-      // Set the pluginId first - when panel opens and panelContent loads,
-      // Component.onCompleted will call loadPluginPanel automatically
       panel1.currentPluginId = pluginId;
+
+      // If panel was already open, Component.onCompleted won't fire again
+      // since panelContent is already loaded. We need to load the plugin manually.
+      if (wasAlreadyOpen && panel1.contentLoader) {
+        panel1.loadPluginPanel(pluginId);
+      }
+
       panel1.open(buttonItem);
       return true;
     }
@@ -1534,7 +1784,7 @@ Singleton {
 
   // Set up file watcher for a plugin directory
   function setupPluginFileWatcher(pluginId) {
-    if (!root.hotReloadEnabled) {
+    if (!isPluginHotReloadEnabled(pluginId)) {
       return;
     }
 
@@ -1579,36 +1829,42 @@ Singleton {
 
     var watchers = [manifestWatcher];
 
-    // Only watch entry points that actually exist in the manifest
-    var entryPoints = manifest.entryPoints || {};
-    var entryPointFiles = [];
-
-    if (entryPoints.main)
-      entryPointFiles.push(entryPoints.main);
-    if (entryPoints.barWidget)
-      entryPointFiles.push(entryPoints.barWidget);
-    if (entryPoints.desktopWidget)
-      entryPointFiles.push(entryPoints.desktopWidget);
-    if (entryPoints.launcherProvider)
-      entryPointFiles.push(entryPoints.launcherProvider);
-    if (entryPoints.panel)
-      entryPointFiles.push(entryPoints.panel);
-    if (entryPoints.settings)
-      entryPointFiles.push(entryPoints.settings);
-    if (entryPoints.controlCenterWidget)
-      entryPointFiles.push(entryPoints.controlCenterWidget);
-
-    for (var i = 0; i < entryPointFiles.length; i++) {
-      var entryPointFile = entryPointFiles[i];
-      var watcher = Qt.createQmlObject(`
+    // Only watch .qml and .js files, also follow symlinks since some of the plugins might have been symlinked in.
+    var qmlWatcher = Qt.createQmlObject(`
+        import QtQuick
         import Quickshell.Io
-        FileView {
-          path: "${pluginDir}/${entryPointFile}"
-          watchChanges: true
+
+        import qs.Commons
+
+        Item {
+            id: root
+            signal fileChanged();
+
+            Process {
+                command: [ "sh", "-c", "find -L ${pluginDir} -name '*.qml' -o -name '*.js'" ]
+                running: true
+                stdout: SplitParser {
+                    splitMarker: "\n"
+                    onRead: line => {
+                        fileWatcher.createObject(root, { path: Qt.resolvedUrl(line) });
+                    }
+                }
+            }
+
+            Component {
+                id: fileWatcher
+                FileView {
+                    watchChanges: true
+
+                    onFileChanged: {
+                        root.fileChanged();
+                    }
+                }
+            }
+
         }
-      `, root, "FileWatcher_" + pluginId + "_" + i);
-      watchers.push(watcher);
-    }
+    `, root, "QmlWatcher_" + pluginId);
+    watchers.push(qmlWatcher);
 
     // Connect all watchers to the debounce timer
     for (var j = 0; j < watchers.length; j++) {
@@ -1617,12 +1873,73 @@ Singleton {
       });
     }
 
+    // Create a separate debounce timer for translation reloads (lighter weight)
+    var translationDebounceTimer = Qt.createQmlObject(`
+      import QtQuick
+      Timer {
+        property string targetPluginId: ""
+        property var reloadCallback: null
+        interval: 300
+        repeat: false
+        onTriggered: {
+          if (reloadCallback) reloadCallback(targetPluginId);
+        }
+      }
+    `, root, "TranslationReloadDebounce_" + pluginId);
+
+    translationDebounceTimer.targetPluginId = pluginId;
+    translationDebounceTimer.reloadCallback = root.reloadPluginTranslations;
+
+    // Watch the current language's translation file
+    var translationWatcher = createTranslationWatcher(pluginId, pluginDir, I18n.langCode, translationDebounceTimer);
+
     root.pluginFileWatchers[pluginId] = {
       watchers: watchers,
-      debounceTimer: debounceTimer
+      debounceTimer: debounceTimer,
+      translationWatcher: translationWatcher,
+      translationDebounceTimer: translationDebounceTimer,
+      pluginDir: pluginDir
     };
 
-    Logger.d("PluginService", "Set up hot reload watcher for plugin:", pluginId);
+    Logger.d("PluginService", "Set up hot reload watcher for plugin:", pluginId, "(including translations)");
+  }
+
+  // Create a translation file watcher for a specific language
+  function createTranslationWatcher(pluginId, pluginDir, language, debounceTimer) {
+    var translationFile = pluginDir + "/i18n/" + language + ".json";
+
+    var watcher = Qt.createQmlObject(`
+      import Quickshell.Io
+      FileView {
+        path: "${translationFile}"
+        watchChanges: true
+      }
+    `, root, "TranslationWatcher_" + pluginId + "_" + language);
+
+    watcher.fileChanged.connect(function () {
+      debounceTimer.restart();
+    });
+
+    Logger.d("PluginService", "Watching translation file:", translationFile);
+    return watcher;
+  }
+
+  // Update translation watchers when language changes
+  function updateTranslationWatchers() {
+    for (var pluginId in root.pluginFileWatchers) {
+      var watcherData = root.pluginFileWatchers[pluginId];
+      if (!watcherData || !watcherData.translationDebounceTimer)
+        continue;
+
+      // Destroy old translation watcher
+      if (watcherData.translationWatcher) {
+        watcherData.translationWatcher.destroy();
+      }
+
+      // Create new watcher for current language
+      watcherData.translationWatcher = createTranslationWatcher(pluginId, watcherData.pluginDir, I18n.langCode, watcherData.translationDebounceTimer);
+    }
+    Logger.d("PluginService", "Updated translation watchers for language:", I18n.langCode);
   }
 
   // Remove file watcher for a plugin
@@ -1644,6 +1961,16 @@ Singleton {
     // Destroy debounce timer
     if (watcherData.debounceTimer) {
       watcherData.debounceTimer.destroy();
+    }
+
+    // Destroy translation watcher
+    if (watcherData.translationWatcher) {
+      watcherData.translationWatcher.destroy();
+    }
+
+    // Destroy translation debounce timer
+    if (watcherData.translationDebounceTimer) {
+      watcherData.translationDebounceTimer.destroy();
     }
 
     delete root.pluginFileWatchers[pluginId];
@@ -1699,22 +2026,62 @@ Singleton {
     return true;
   }
 
-  // Enable/disable hot reload for all loaded plugins
-  function setHotReloadEnabled(enabled) {
-    root.hotReloadEnabled = enabled;
+  // Hot reload only translations for a plugin (lightweight, no component reload)
+  function reloadPluginTranslations(pluginId) {
+    var plugin = root.loadedPlugins[pluginId];
+    if (!plugin || !plugin.api || !plugin.manifest) {
+      Logger.w("PluginService", "Cannot reload translations: plugin not loaded:", pluginId);
+      return false;
+    }
 
-    if (enabled) {
-      // Set up watchers for all loaded plugins
-      for (var pluginId in root.loadedPlugins) {
-        setupPluginFileWatcher(pluginId);
+    Logger.i("PluginService", "Hot reloading translations for plugin:", pluginId);
+
+    loadPluginTranslationsAsync(pluginId, plugin.manifest, I18n.langCode, function (translations) {
+      plugin.api.pluginTranslations = translations;
+
+      // Also reload English fallback for non-English languages
+      if (I18n.langCode !== "en") {
+        loadPluginTranslationsAsync(pluginId, plugin.manifest, "en", function (fallbackTranslations) {
+          plugin.api.pluginFallbackTranslations = fallbackTranslations;
+          plugin.api.translationVersion++;
+
+          var pluginName = plugin.manifest.name || pluginId;
+          ToastService.showNotice(I18n.tr("panels.plugins.title"), I18n.tr("panels.plugins.translations-reloaded", {
+                                                                             "name": pluginName
+                                                                           }));
+          Logger.i("PluginService", "Translation hot reload complete for plugin:", pluginId);
+        });
+      } else {
+        plugin.api.pluginFallbackTranslations = {};
+        plugin.api.translationVersion++;
+
+        var pluginName = plugin.manifest.name || pluginId;
+        ToastService.showNotice(I18n.tr("panels.plugins.title"), I18n.tr("panels.plugins.translations-reloaded", {
+                                                                           "name": pluginName
+                                                                         }));
+        Logger.i("PluginService", "Translation hot reload complete for plugin:", pluginId);
       }
-      Logger.i("PluginService", "Hot reload enabled for all plugins");
+    });
+
+    return true;
+  }
+
+  // Check if a certain plugin has hot reload enabled
+  function isPluginHotReloadEnabled(pluginId) {
+    return root.pluginHotReloadEnabled.indexOf(pluginId) !== -1;
+  }
+
+  // Toggle the hot reload state of a certain plugin
+  function togglePluginHotReload(pluginId) {
+    const index = root.pluginHotReloadEnabled.indexOf(pluginId);
+    if (index === -1) {
+      root.pluginHotReloadEnabled.push(pluginId);
+      setupPluginFileWatcher(pluginId);
+      Logger.i("PluginService", "Hot reload enabled for plugin:", pluginId);
     } else {
-      // Remove all watchers
-      for (var pluginId in root.pluginFileWatchers) {
-        removePluginFileWatcher(pluginId);
-      }
-      Logger.i("PluginService", "Hot reload disabled");
+      root.pluginHotReloadEnabled.splice(index, 1);
+      removePluginFileWatcher(pluginId);
+      Logger.i("PluginService", "Hot reload disabled for plugin:", pluginId);
     }
   }
 }

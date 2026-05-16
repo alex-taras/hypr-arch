@@ -10,6 +10,7 @@ ColumnLayout {
   spacing: Style.marginM
 
   // Properties to receive data from parent
+  property var screen: null
   property var widgetData: null
   property var widgetMetadata: null
 
@@ -17,14 +18,11 @@ ColumnLayout {
 
   // Local state
   property string valueDisplayMode: widgetData.displayMode !== undefined ? widgetData.displayMode : widgetMetadata.displayMode
-  property int valueWarningThreshold: widgetData.warningThreshold !== undefined ? widgetData.warningThreshold : widgetMetadata.warningThreshold
-  property string valueDeviceNativePath: widgetData.deviceNativePath !== undefined ? widgetData.deviceNativePath : ""
+  property string valueDeviceNativePath: widgetData.deviceNativePath !== undefined ? widgetData.deviceNativePath : widgetMetadata.deviceNativePath
   property bool valueShowPowerProfiles: widgetData.showPowerProfiles !== undefined ? widgetData.showPowerProfiles : widgetMetadata.showPowerProfiles
   property bool valueShowNoctaliaPerformance: widgetData.showNoctaliaPerformance !== undefined ? widgetData.showNoctaliaPerformance : widgetMetadata.showNoctaliaPerformance
   property bool valueHideIfNotDetected: widgetData.hideIfNotDetected !== undefined ? widgetData.hideIfNotDetected : widgetMetadata.hideIfNotDetected
   property bool valueHideIfIdle: widgetData.hideIfIdle !== undefined ? widgetData.hideIfIdle : widgetMetadata.hideIfIdle
-
-  property var deviceModel: BatteryService.devicesModel
 
   function saveSettings() {
     var settings = Object.assign({}, widgetData || {});
@@ -32,110 +30,62 @@ ColumnLayout {
       settings.id = widgetData.id;
     }
     settings.displayMode = valueDisplayMode;
-    settings.warningThreshold = valueWarningThreshold;
     settings.showPowerProfiles = valueShowPowerProfiles;
     settings.showNoctaliaPerformance = valueShowNoctaliaPerformance;
     settings.hideIfNotDetected = valueHideIfNotDetected;
     settings.hideIfIdle = valueHideIfIdle;
-    if (valueDeviceNativePath && valueDeviceNativePath !== "") {
-      settings.deviceNativePath = valueDeviceNativePath;
-    } else {
-      delete settings.deviceNativePath;
-    }
-    return settings;
+    settings.deviceNativePath = valueDeviceNativePath;
+    settingsChanged(settings);
   }
 
-  RowLayout {
+  NComboBox {
+    id: deviceComboBox
     Layout.fillWidth: true
-    spacing: Style.marginM
-
-    NComboBox {
-      id: deviceComboBox
-      Layout.fillWidth: true
-      label: I18n.tr("bar.battery.device-label")
-      description: I18n.tr("bar.battery.device-description")
-      minimumWidth: 200
-      model: root.deviceModel
-      currentKey: root.valueDeviceNativePath
-      onSelected: key => {
-                    root.valueDeviceNativePath = key;
-                    settingsChanged(saveSettings());
-                  }
-    }
-
-    // Update currentKey when model changes to ensure selection is preserved
-    Connections {
-      target: root
-      function onDeviceModelChanged() {
-        // Force update of currentKey to trigger selection update
-        deviceComboBox.currentKey = root.valueDeviceNativePath;
-      }
-    }
-
-    NIconButton {
-      icon: "refresh"
-      tooltipText: I18n.tr("common.refresh")
-      onClicked: BatteryService.devicesModel = BatteryService.buildDeviceModel()
-    }
+    label: I18n.tr("bar.battery.device-label")
+    description: I18n.tr("bar.battery.device-description")
+    minimumWidth: 240
+    model: BatteryService.deviceModel
+    currentKey: root.valueDeviceNativePath
+    onSelected: key => {
+                  root.valueDeviceNativePath = key;
+                  saveSettings();
+                }
+    defaultValue: widgetMetadata.deviceNativePath
   }
 
   NComboBox {
     Layout.fillWidth: true
-    label: I18n.tr("bar.volume.display-mode-label")
-    description: I18n.tr("bar.volume.display-mode-description")
+    label: I18n.tr("common.display-mode")
+    description: I18n.tr("bar.battery.display-mode-description")
     minimumWidth: 240
     model: [
       {
-        "key": "onhover",
-        "name": I18n.tr("display-modes.on-hover")
+        "key": "graphic",
+        "name": I18n.tr("bar.battery.display-mode-graphic")
       },
       {
-        "key": "alwaysShow",
-        "name": I18n.tr("display-modes.always-show")
+        "key": "graphic-clean",
+        "name": I18n.tr("bar.battery.display-mode-graphic-clean")
       },
       {
-        "key": "alwaysHide",
-        "name": I18n.tr("display-modes.always-hide")
+        "key": "icon-hover",
+        "name": I18n.tr("bar.battery.display-mode-icon-hover")
+      },
+      {
+        "key": "icon-always",
+        "name": I18n.tr("bar.battery.display-mode-icon-always")
+      },
+      {
+        "key": "icon-only",
+        "name": I18n.tr("bar.battery.display-mode-icon-only")
       }
     ]
     currentKey: root.valueDisplayMode
     onSelected: key => {
                   root.valueDisplayMode = key;
-                  settingsChanged(saveSettings());
+                  saveSettings();
                 }
-  }
-
-  NSpinBox {
-    label: I18n.tr("bar.battery.low-battery-threshold-label")
-    description: I18n.tr("bar.battery.low-battery-threshold-description")
-    value: valueWarningThreshold
-    suffix: "%"
-    minimum: 5
-    maximum: 50
-    onValueChanged: {
-      valueWarningThreshold = value;
-      settingsChanged(saveSettings());
-    }
-  }
-
-  NToggle {
-    label: I18n.tr("bar.battery.show-power-profile-label")
-    description: I18n.tr("bar.battery.show-power-profile-description")
-    checked: valueShowPowerProfiles
-    onToggled: checked => {
-                 valueShowPowerProfiles = checked;
-                 settingsChanged(saveSettings());
-               }
-  }
-
-  NToggle {
-    label: I18n.tr("bar.battery.show-noctalia-performance-label")
-    description: I18n.tr("bar.battery.show-noctalia-performance-description")
-    checked: valueShowNoctaliaPerformance
-    onToggled: checked => {
-                 valueShowNoctaliaPerformance = checked;
-                 settingsChanged(saveSettings());
-               }
+    defaultValue: widgetMetadata.displayMode
   }
 
   NToggle {
@@ -144,8 +94,9 @@ ColumnLayout {
     checked: valueHideIfNotDetected
     onToggled: checked => {
                  valueHideIfNotDetected = checked;
-                 settingsChanged(saveSettings());
+                 saveSettings();
                }
+    defaultValue: widgetMetadata.hideIfNotDetected
   }
 
   NToggle {
@@ -154,7 +105,34 @@ ColumnLayout {
     checked: valueHideIfIdle
     onToggled: checked => {
                  valueHideIfIdle = checked;
-                 settingsChanged(saveSettings());
+                 saveSettings();
                }
+    defaultValue: widgetMetadata.hideIfIdle
+  }
+
+  NDivider {
+    Layout.fillWidth: true
+  }
+
+  NToggle {
+    label: I18n.tr("bar.battery.show-power-profile-label")
+    description: I18n.tr("bar.battery.show-power-profile-description")
+    checked: valueShowPowerProfiles
+    onToggled: checked => {
+                 valueShowPowerProfiles = checked;
+                 saveSettings();
+               }
+    defaultValue: widgetMetadata.showPowerProfiles
+  }
+
+  NToggle {
+    label: I18n.tr("bar.battery.show-noctalia-performance-label")
+    description: I18n.tr("bar.battery.show-noctalia-performance-description")
+    checked: valueShowNoctaliaPerformance
+    onToggled: checked => {
+                 valueShowNoctaliaPerformance = checked;
+                 saveSettings();
+               }
+    defaultValue: widgetMetadata.showNoctaliaPerformance
   }
 }

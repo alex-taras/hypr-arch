@@ -33,12 +33,12 @@ Popup {
   property string cachedBranch: "main"
   property string cachedBranchSha: ""
 
-  width: Math.max(500, contentColumn.implicitWidth + (Style.marginXL * 2))
-  height: Math.min(800, contentColumn.implicitHeight + (Style.marginXL * 2))
+  width: Math.max(500, contentColumn.implicitWidth + Style.margin2XL)
+  height: Math.min(800, contentColumn.implicitHeight + Style.margin2XL)
   padding: Style.marginXL
   modal: true
+  closePolicy: Popup.NoAutoClose
   dim: false
-  closePolicy: Popup.CloseOnEscape | Popup.CloseOnPressOutside
   anchors.centerIn: parent
 
   // Helper function to get color from cached scheme data
@@ -521,8 +521,9 @@ Popup {
       var localDir = localPath.substring(0, localPath.lastIndexOf('/'));
 
       downloadScript += "mkdir -p '" + localDir + "'\n";
-      var downloadUrl = file.url || file.download_url;
-      if (downloadUrl) {
+      var rawUrl = file.url || file.download_url;
+      if (rawUrl) {
+        var downloadUrl = encodeURI(rawUrl);
         downloadScript += "curl -L -s -o '" + localPath + "' '" + downloadUrl + "' || wget -q -O '" + localPath + "' '" + downloadUrl + "'\n";
       }
     }

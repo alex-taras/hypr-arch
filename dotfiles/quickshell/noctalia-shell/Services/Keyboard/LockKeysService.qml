@@ -1,4 +1,6 @@
 pragma Singleton
+import Qt.labs.folderlistmodel 2.10
+import QtQml.Models
 
 import QtQuick
 import Quickshell
@@ -8,6 +10,23 @@ import qs.Commons
 Singleton {
   id: root
 
+  // Component registration - only poll when something needs lock key state
+  function registerComponent(componentId) {
+    root._registered[componentId] = true;
+    root._registered = Object.assign({}, root._registered);
+    Logger.d("LockKeys", "Component registered:", componentId, "- total:", root._registeredCount);
+  }
+
+  function unregisterComponent(componentId) {
+    delete root._registered[componentId];
+    root._registered = Object.assign({}, root._registered);
+    Logger.d("LockKeys", "Component unregistered:", componentId, "- total:", root._registeredCount);
+  }
+
+  property var _registered: ({})
+  readonly property int _registeredCount: Object.keys(_registered).length
+  readonly property bool shouldRun: _registeredCount > 0
+
   property bool capsLockOn: false
   property bool numLockOn: false
   property bool scrollLockOn: false
@@ -16,83 +35,117 @@ Singleton {
   signal numLockChanged(bool active)
   signal scrollLockChanged(bool active)
 
-  // Flag to track if this is the initial check to avoid OSD triggers
-  property bool initialCheckDone: false
+  Instantiator {
+    model: FolderListModel {
+      id: folderModel
+      folder: Qt.resolvedUrl("/sys/class/leds")
+      showFiles: false
+      showOnlyReadable: true
+    }
+    delegate: Component {
+      FileView {
+        id: fileView
+        path: filePath + "/brightness"
+        // sysfs brightness can fail transiently (e.g. resume); omit console spam like other sysfs FileViews.
+        printErrors: false
+        watchChanges: false
 
-  Process {
-    id: stateCheckProcess
+        function parseBrightnessLedOn(raw) {
+          var t = raw.trim();
+          if (t === "" || !/^[0-9]+$/.test(t))
+            return null;
+          return parseInt(t, 10) !== 0;
+        }
 
-    property string checkCommand: " \
-caps=0; cat /sys/class/leds/input*::capslock/brightness 2>/dev/null | grep -q 1 && caps=1; echo \"caps:${caps}\"; \
-num=0; cat /sys/class/leds/input*::numlock/brightness 2>/dev/null | grep -q 1 && num=1; echo \"num:${num}\"; \
-scroll=0; cat /sys/class/leds/input*::scrolllock/brightness 2>/dev/null | grep -q 1 && scroll=1; echo \"scroll:${scroll}\"; \
-"
-    command: ["sh", "-c", stateCheckProcess.checkCommand]
+        function applyLockState(kind, state, emitIfChanged) {
+          switch (kind) {
+          case "numlock":
+            if (emitIfChanged && root.numLockOn !== state) {
+              root.numLockOn = state;
+              root.numLockChanged(state);
+              Logger.i("LockKeysService", "Num Lock:", state, fileView.path);
+            } else if (!emitIfChanged) {
+              root.numLockOn = state;
+            }
+            break;
+          case "capslock":
+            if (emitIfChanged && root.capsLockOn !== state) {
+              root.capsLockOn = state;
+              root.capsLockChanged(state);
+              Logger.i("LockKeysService", "Caps Lock:", state, fileView.path);
+            } else if (!emitIfChanged) {
+              root.capsLockOn = state;
+            }
+            break;
+          case "scrolllock":
+            if (emitIfChanged && root.scrollLockOn !== state) {
+              root.scrollLockOn = state;
+              root.scrollLockChanged(state);
+              Logger.i("LockKeysService", "Scroll Lock:", state, fileView.path);
+            } else if (!emitIfChanged) {
+              root.scrollLockOn = state;
+            }
+            break;
+          }
+        }
 
-    stdout: StdioCollector {
-      onStreamFinished: {
-        var lines = this.text.trim().split('\n');
-        for (var i = 0; i < lines.length; i++) {
-          var parts = lines[i].split(':');
-          if (parts.length === 2) {
-            var key = parts[0];
-            var newState = (parts[1] === '1');
+        // Only apply after a successful read — failed reloads must not update UI (empty text is not "off").
+        onLoaded: {
+          if (!fileView.isWanted)
+          return;
+          var state = fileView.parseBrightnessLedOn(fileView.text());
+          if (state === null)
+          return;
 
-            if (key === "caps") {
-              if (root.capsLockOn !== newState) {
-                root.capsLockOn = newState;
-                if (root.initialCheckDone) {
-                  root.capsLockChanged(newState);
-                }
-                Logger.i("LockKeysService", "Caps Lock:", capsLockOn);
-              }
-            } else if (key === "num") {
-              if (root.numLockOn !== newState) {
-                root.numLockOn = newState;
-                if (root.initialCheckDone) {
-                  root.numLockChanged(newState);
-                }
-                Logger.i("LockKeysService", "Num Lock:", numLockOn);
-              }
-            } else if (key === "scroll") {
-              if (root.scrollLockOn !== newState) {
-                root.scrollLockOn = newState;
-                if (root.initialCheckDone) {
-                  root.scrollLockChanged(newState);
-                }
-                Logger.i("LockKeysService", "Scroll Lock:", scrollLockOn);
-              }
+          var kind = fileName.split("::")[1];
+
+          // First read after polling starts: sync bar/UI from sysfs without firing
+          // *Changed signals (OSD listens to those and would flash on startup).
+          if (!fileView.initialCheckDone) {
+            fileView.initialCheckDone = true;
+            fileView.applyLockState(kind, state, false);
+            return;
+          }
+
+          fileView.applyLockState(kind, state, true);
+        }
+
+        // FolderListModel only provides filters for file names, not folders
+        property bool isWanted: {
+          if (fileName.startsWith("input") && fileName.includes("::")) {
+            switch (fileName.split("::")[1]) {
+              case "numlock":
+              case "capslock":
+              case "scrolllock":
+              return true;
+            }
+          }
+          return false;
+        }
+
+        // After shouldRun becomes true, first brightness read updates properties only (no *Changed signals).
+        property bool initialCheckDone: false
+        property variant connections: Connections {
+          target: root
+          function onShouldRunChanged() {
+            if (root.shouldRun) {
+              fileView.initialCheckDone = false;
             }
           }
         }
-        // Set initialCheckDone to true after the first check is complete
-        if (!root.initialCheckDone) {
-          root.initialCheckDone = true;
-        }
-      }
-    }
-    stderr: StdioCollector {
-      onStreamFinished: {
-        if (this.text.trim().length > 0)
-        Logger.i("LockKeysService", "Error running state check:", this.text.trim());
-      }
-    }
-  }
 
-  Timer {
-    id: pollTimer
-    interval: 200
-    running: true
-    repeat: true
-    onTriggered: {
-      if (!stateCheckProcess.running) {
-        stateCheckProcess.running = true;
+        // sysfs does not provide change notifications
+        property variant refreshTimer: Timer {
+          interval: 200
+          running: root.shouldRun && fileView.isWanted
+          repeat: true
+          onTriggered: fileView.reload()
+        }
       }
     }
   }
 
   Component.onCompleted: {
-    Logger.i("LockKeysService", "Service started, performing initial state check.");
-    stateCheckProcess.running = true;
+    Logger.i("LockKeysService", "Service started (polling deferred until a consumer registers).");
   }
 }

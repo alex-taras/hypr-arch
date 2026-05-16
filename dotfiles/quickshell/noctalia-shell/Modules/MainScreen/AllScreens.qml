@@ -4,7 +4,6 @@ import Quickshell.Wayland
 
 import qs.Commons
 import qs.Modules.MainScreen
-import qs.Services.Noctalia
 import qs.Services.UI
 
 // ------------------------------
@@ -39,7 +38,7 @@ Variants {
     // Main Screen loader - Bar and panels backgrounds
     Loader {
       id: windowLoader
-      active: parent.shouldBeActive && PluginService.pluginsFullyLoaded
+      active: parent.shouldBeActive
       asynchronous: false
 
       property ShellScreen loaderScreen: modelData
@@ -55,9 +54,12 @@ Variants {
     }
 
     // Bar content in separate windows to prevent fullscreen redraws
+    // Note: Window stays alive when bar is hidden (visible=false) to avoid
+    // rapid Wayland surface destruction/creation that can crash compositors.
+    // Content is debounce-unloaded inside BarContentWindow.
     Loader {
       active: {
-        if (!parent.windowLoaded || !parent.shouldBeActive || !BarService.effectivelyVisible)
+        if (!parent.windowLoaded || !parent.shouldBeActive)
           return false;
 
         // Check if bar is configured for this screen
@@ -75,13 +77,42 @@ Variants {
       }
     }
 
+    // BarTriggerZone - thin invisible zone to reveal hidden bar
+    // Always loaded when auto-hide is enabled (it's just 1px, no performance impact)
+    Loader {
+      active: {
+        if (!parent.windowLoaded || !parent.shouldBeActive)
+          return false;
+        if (!BarService.effectivelyVisible)
+          return false;
+        if (Settings.getBarDisplayModeForScreen(modelData?.name) !== "auto_hide")
+          return false;
+
+        // Check if bar is configured for this screen
+        var monitors = Settings.data.bar.monitors || [];
+        return monitors.length === 0 || monitors.includes(modelData?.name);
+      }
+      asynchronous: false
+
+      sourceComponent: BarTriggerZone {
+        screen: modelData
+      }
+
+      onLoaded: {
+        Logger.d("AllScreens", "BarTriggerZone created for", modelData?.name);
+      }
+    }
+
     // BarExclusionZone - created after MainScreen has fully loaded
-    // Disabled when bar is hidden or not configured for this screen
+    // Note: Exclusion zone should NOT be affected by hideOnOverview setting.
+    // When bar is hidden during overview, the exclusion zone should remain to prevent
+    // windows from moving into the bar area. Auto-hide is handled by the component
+    // itself via ExclusionMode.Ignore/Auto.
     Repeater {
       model: Settings.data.bar.barType === "framed" ? ["top", "bottom", "left", "right"] : [Settings.getBarPositionForScreen(windowItem.modelData?.name)]
       delegate: Loader {
         active: {
-          if (!windowItem.windowLoaded || !windowItem.shouldBeActive || !BarService.effectivelyVisible)
+          if (!windowItem.windowLoaded || !windowItem.shouldBeActive)
             return false;
 
           // Check if bar is configured for this screen
@@ -102,10 +133,17 @@ Variants {
     }
 
     // PopupMenuWindow - reusable popup window for both tray menus and context menus
-    // Disabled when bar is hidden or not configured for this screen
+    // Stays alive when bar is hidden to avoid Wayland surface churn crashes.
+    // PopupMenuWindow manages its own visibility internally.
     Loader {
       active: {
-        if (!parent.windowLoaded || !parent.shouldBeActive || !BarService.effectivelyVisible)
+        // Desktop widgets edit mode needs popup window on ALL screens
+        if (DesktopWidgetRegistry.editMode && Settings.data.desktopWidgets.enabled) {
+          return true;
+        }
+
+        // Normal bar-based condition
+        if (!parent.windowLoaded || !parent.shouldBeActive)
           return false;
 
         // Check if bar is configured for this screen

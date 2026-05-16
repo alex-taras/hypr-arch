@@ -1,3 +1,5 @@
+pragma Singleton
+
 import QtQuick
 import Quickshell
 import Quickshell.Io
@@ -8,6 +10,7 @@ import qs.Commons
 import qs.Modules.Panels.Settings
 import qs.Services.Compositor
 import qs.Services.Hardware
+import qs.Services.Location
 import qs.Services.Media
 import qs.Services.Networking
 import qs.Services.Noctalia
@@ -16,37 +19,146 @@ import qs.Services.System
 import qs.Services.Theming
 import qs.Services.UI
 
-Item {
+Singleton {
   id: root
 
-  // Screen detector passed from shell.qml
-  required property CurrentScreenDetector screenDetector
+  // Screen detector, set via init()
+  property var screenDetector: null
+
+  function init(detector) {
+    root.screenDetector = detector;
+    Logger.i("IPCService", "Service started");
+  }
+
+  // Helper for index-based notification lookups in IPC
+  function _getNotificationByIndex(index: string, funcName: string) {
+    var idx = index === "" ? 0 : parseInt(index);
+    if (isNaN(idx)) {
+      Logger.w("IPC", "Argument to ipc call '" + funcName + "' must be a number");
+      return null;
+    }
+    if (idx < 0 || idx >= NotificationService.popupModel.count) {
+      Logger.w("IPC", "Notification index out of range: " + idx);
+      return null;
+    }
+    return NotificationService.popupModel.get(idx);
+  }
 
   IpcHandler {
     target: "bar"
     function toggle() {
-      BarService.isVisible = !BarService.isVisible;
+      BarService.toggleVisibility();
     }
-    function hide() {
-      BarService.isVisible = false;
+    function hideBar() {
+      BarService.hide();
     }
-    function show() {
-      BarService.isVisible = true;
+    function showBar() {
+      BarService.show();
     }
+    function peek() {
+      BarService.peek();
+    }
+    function setDisplayMode(mode: string, screen: string) {
+      if (mode === "always_visible" || mode === "non_exclusive" || mode === "auto_hide") {
+        if (!screen || screen === "all") {
+          Settings.data.bar.displayMode = mode;
+        } else {
+          Settings.setScreenOverride(screen, "displayMode", mode);
+        }
+      }
+    }
+    function setPosition(position: string, screen: string) {
+      var valid = position === "top" || position === "bottom" || position === "left" || position === "right";
+      if (!valid) {
+        Logger.w("IPC", "Invalid bar position: " + position + ". Valid: top, bottom, left, right");
+        return;
+      }
+      if (!screen || screen === "all") {
+        Settings.data.bar.position = position;
+      } else {
+        Settings.setScreenOverride(screen, "position", position);
+      }
+    }
+  }
+
+  // Settings IPC helpers (outside IpcHandler to avoid QVariant IPC warnings)
+  readonly property var _settingsTabMap: ({
+                                            "about": SettingsPanel.Tab.About,
+                                            "audio": SettingsPanel.Tab.Audio,
+                                            "bar": SettingsPanel.Tab.Bar,
+                                            "colorscheme": SettingsPanel.Tab.ColorScheme,
+                                            "lockscreen": SettingsPanel.Tab.LockScreen,
+                                            "controlcenter": SettingsPanel.Tab.ControlCenter,
+                                            "desktopwidgets": SettingsPanel.Tab.DesktopWidgets,
+                                            "osd": SettingsPanel.Tab.OSD,
+                                            "display": SettingsPanel.Tab.Display,
+                                            "dock": SettingsPanel.Tab.Dock,
+                                            "general": SettingsPanel.Tab.General,
+                                            "hooks": SettingsPanel.Tab.Hooks,
+                                            "launcher": SettingsPanel.Tab.Launcher,
+                                            "location": SettingsPanel.Tab.Location,
+                                            "connections": SettingsPanel.Tab.Connections,
+                                            "notifications": SettingsPanel.Tab.Notifications,
+                                            "plugins": SettingsPanel.Tab.Plugins,
+                                            "sessionmenu": SettingsPanel.Tab.SessionMenu,
+                                            "system": SettingsPanel.Tab.System,
+                                            "systemmonitor": SettingsPanel.Tab.System,
+                                            "userinterface": SettingsPanel.Tab.UserInterface,
+                                            "wallpaper": SettingsPanel.Tab.Wallpaper,
+                                            "idle": SettingsPanel.Tab.Idle
+                                          })
+
+  function _parseSettingsTabArg(tabArg) {
+    var parts = tabArg.split("/");
+    var tabId = _resolveSettingsTab(parts[0]);
+    var subTabId = parts.length > 1 ? parseInt(parts[1]) : -1;
+    return {
+      "tab": tabId,
+      "subTab": isNaN(subTabId) ? -1 : subTabId
+    };
+  }
+
+  function _resolveSettingsTab(tabName) {
+    if (!tabName)
+      return SettingsPanel.Tab.General;
+    var key = tabName.toLowerCase().replace(/[-_]/g, "");
+    if (key in _settingsTabMap)
+      return _settingsTabMap[key];
+    Logger.w("IPC", "Unknown settings tab: " + tabName);
+    return SettingsPanel.Tab.General;
+  }
+
+  function _settingsToggle(tabId, subTabId) {
+    root.screenDetector.withCurrentScreen(screen => {
+                                            SettingsPanelService.toggle(tabId, subTabId, screen);
+                                          });
+  }
+
+  function _settingsOpen(tabId, subTabId) {
+    root.screenDetector.withCurrentScreen(screen => {
+                                            SettingsPanelService.openToTab(tabId, subTabId, screen);
+                                          });
   }
 
   IpcHandler {
     target: "settings"
+
     function toggle() {
-      if (Settings.data.ui.settingsPanelMode === "window") {
-        SettingsPanelService.toggleWindow(SettingsPanel.Tab.General);
-      } else {
-        root.screenDetector.withCurrentScreen(screen => {
-                                                var settingsPanel = PanelService.getPanel("settingsPanel", screen);
-                                                settingsPanel.requestedTab = SettingsPanel.Tab.General;
-                                                settingsPanel?.toggle();
-                                              });
-      }
+      root._settingsToggle(SettingsPanel.Tab.General, -1);
+    }
+
+    function toggleTab(tab: string) {
+      var parsed = root._parseSettingsTabArg(tab);
+      root._settingsToggle(parsed.tab, parsed.subTab);
+    }
+
+    function open() {
+      root._settingsOpen(SettingsPanel.Tab.General, -1);
+    }
+
+    function openTab(tab: string) {
+      var parsed = root._parseSettingsTabArg(tab);
+      root._settingsOpen(parsed.tab, parsed.subTab);
     }
   }
 
@@ -83,7 +195,7 @@ Item {
     }
 
     function dismissOldest() {
-      NotificationService.dismissOldestActive();
+      NotificationService.dismissOldestPopup();
     }
 
     function removeOldestHistory() {
@@ -91,7 +203,7 @@ Item {
     }
 
     function dismissAll() {
-      NotificationService.dismissAllActive();
+      NotificationService.dismissAllPopups();
     }
 
     function getHistory(): string {
@@ -101,12 +213,90 @@ Item {
     function removeFromHistory(id: string): bool {
       return NotificationService.removeFromHistory(id);
     }
+
+    function invokeDefault(index: string): bool {
+      var notif = root._getNotificationByIndex(index, "notifications invokeDefault");
+      if (!notif)
+        return false;
+
+      var actions = JSON.parse(notif.actionsJson || "[]");
+      if (actions.length === 0)
+        return false;
+
+      var actionId = actions.find(a => a.identifier === "default")?.identifier ?? actions[0].identifier;
+      return NotificationService.invokeAction(notif.id, actionId);
+    }
+
+    function invokeDefaultAndDismiss(index: string): bool {
+      var notif = root._getNotificationByIndex(index, "notifications invokeDefaultAndDismiss");
+      if (!notif)
+        return false;
+
+      var actions = JSON.parse(notif.actionsJson || "[]");
+      if (actions.length === 0) {
+        NotificationService.dismissPopup(notif.id);
+        return false;
+      }
+
+      var actionId = actions.find(a => a.identifier === "default")?.identifier ?? actions[0].identifier;
+      var result = NotificationService.invokeAction(notif.id, actionId);
+      NotificationService.dismissPopup(notif.id);
+      return result;
+    }
+
+    function invokeAction(id: string, actionId: string): bool {
+      if (!id || !actionId) {
+        Logger.w("IPC", "Both 'id' and 'actionId' are required for 'notifications invokeAction'");
+        return false;
+      }
+      return NotificationService.invokeAction(id, actionId);
+    }
+
+    function getActions(index: string): string {
+      var notif = root._getNotificationByIndex(index, "notifications getActions");
+      if (!notif)
+        return "[]";
+      return notif.actionsJson || "[]";
+    }
   }
 
   IpcHandler {
+    target: "toast"
+
+    function send(json: string) {
+      try {
+        var data = JSON.parse(json);
+        var title = data.title || "";
+        var body = data.body || "";
+        var icon = data.icon || "";
+        var type = data.type || "notice";
+        var duration = data.duration;
+
+        switch (type) {
+        case "warning":
+          ToastService.showWarning(title, body, duration ?? 4000);
+          break;
+        case "error":
+          ToastService.showError(title, body, duration ?? 6000);
+          break;
+        default:
+          ToastService.showNotice(title, body, icon, duration ?? 3000);
+        }
+      } catch (error) {
+        Logger.e("IPC", "Failed to parse toast JSON: " + error);
+      }
+    }
+
+    function dismiss() {
+      ToastService.dismissToast();
+    }
+  }
+
+  // Idle Inhibitor / Keep Awake
+  IpcHandler {
     target: "idleInhibitor"
     function toggle() {
-      return IdleInhibitorService.manualToggle();
+      IdleInhibitorService.manualToggle();
     }
     function enable() {
       IdleInhibitorService.addManualInhibitor(null);
@@ -114,89 +304,104 @@ Item {
     function disable() {
       IdleInhibitorService.removeManualInhibitor();
     }
+    function enableFor(seconds: string) {
+      var secs = parseInt(seconds);
+      if (isNaN(secs) || secs <= 0) {
+        Logger.w("IPC", "Argument to 'idleInhibitor enableFor' must be a positive number");
+        return;
+      }
+      IdleInhibitorService.addManualInhibitor(secs);
+    }
   }
 
   IpcHandler {
     target: "launcher"
     function toggle() {
       root.screenDetector.withCurrentScreen(screen => {
-                                              var launcherPanel = PanelService.getPanel("launcherPanel", screen);
-                                              if (!launcherPanel)
-                                              return;
-                                              var searchText = launcherPanel.searchText || "";
+                                              var searchText = PanelService.getLauncherSearchText(screen);
                                               var isInAppMode = !searchText.startsWith(">");
-                                              if (!launcherPanel.isPanelOpen) {
+                                              if (!PanelService.isLauncherOpen(screen)) {
                                                 // Closed -> open in app mode
-                                                launcherPanel.open();
-                                                launcherPanel.setSearchText("");
+                                                PanelService.openLauncherWithSearch(screen, "");
                                               } else if (isInAppMode) {
                                                 // Already in app mode -> close
-                                                launcherPanel.close();
+                                                PanelService.closeLauncher(screen);
                                               } else {
                                                 // In another mode -> switch to app mode
-                                                launcherPanel.setSearchText("");
+                                                PanelService.setLauncherSearchText(screen, "");
                                               }
-                                            });
+                                            }, Settings.data.appLauncher.overviewLayer);
     }
     function clipboard() {
       root.screenDetector.withCurrentScreen(screen => {
-                                              var launcherPanel = PanelService.getPanel("launcherPanel", screen);
-                                              if (!launcherPanel)
-                                              return;
-                                              var searchText = launcherPanel.searchText || "";
+                                              var searchText = PanelService.getLauncherSearchText(screen);
                                               var isInClipMode = searchText.startsWith(">clip");
-                                              if (!launcherPanel.isPanelOpen) {
+                                              if (!PanelService.isLauncherOpen(screen)) {
                                                 // Closed -> open in clipboard mode
-                                                launcherPanel.open();
-                                                launcherPanel.setSearchText(">clip ");
+                                                PanelService.openLauncherWithSearch(screen, ">clip ");
                                               } else if (isInClipMode) {
                                                 // Already in clipboard mode -> close
-                                                launcherPanel.close();
+                                                PanelService.closeLauncher(screen);
                                               } else {
                                                 // In another mode -> switch to clipboard mode
-                                                launcherPanel.setSearchText(">clip ");
+                                                PanelService.setLauncherSearchText(screen, ">clip ");
                                               }
-                                            });
+                                            }, Settings.data.appLauncher.overviewLayer);
     }
     function command() {
       root.screenDetector.withCurrentScreen(screen => {
-                                              var launcherPanel = PanelService.getPanel("launcherPanel", screen);
-                                              if (!launcherPanel)
-                                              return;
-                                              var searchText = launcherPanel.searchText || "";
-                                              var isInClipMode = searchText.startsWith(">cmd");
-                                              if (!launcherPanel.isPanelOpen) {
-                                                // Closed -> open in clipboard mode
-                                                launcherPanel.open();
-                                                launcherPanel.setSearchText(">cmd ");
-                                              } else if (isInClipMode) {
-                                                // Already in clipboard mode -> close
-                                                launcherPanel.close();
+                                              var searchText = PanelService.getLauncherSearchText(screen);
+                                              var isInCmdMode = searchText.startsWith(">cmd");
+                                              if (!PanelService.isLauncherOpen(screen)) {
+                                                PanelService.openLauncherWithSearch(screen, ">cmd ");
+                                              } else if (isInCmdMode) {
+                                                PanelService.closeLauncher(screen);
                                               } else {
-                                                // In another mode -> switch to clipboard mode
-                                                launcherPanel.setSearchText(">cmd ");
+                                                PanelService.setLauncherSearchText(screen, ">cmd ");
                                               }
-                                            });
+                                            }, Settings.data.appLauncher.overviewLayer);
     }
     function emoji() {
       root.screenDetector.withCurrentScreen(screen => {
-                                              var launcherPanel = PanelService.getPanel("launcherPanel", screen);
-                                              if (!launcherPanel)
-                                              return;
-                                              var searchText = launcherPanel.searchText || "";
+                                              var searchText = PanelService.getLauncherSearchText(screen);
                                               var isInEmojiMode = searchText.startsWith(">emoji");
-                                              if (!launcherPanel.isPanelOpen) {
+                                              if (!PanelService.isLauncherOpen(screen)) {
                                                 // Closed -> open in emoji mode
-                                                launcherPanel.open();
-                                                launcherPanel.setSearchText(">emoji ");
+                                                PanelService.openLauncherWithSearch(screen, ">emoji ");
                                               } else if (isInEmojiMode) {
                                                 // Already in emoji mode -> close
-                                                launcherPanel.close();
+                                                PanelService.closeLauncher(screen);
                                               } else {
                                                 // In another mode -> switch to emoji mode
-                                                launcherPanel.setSearchText(">emoji ");
+                                                PanelService.setLauncherSearchText(screen, ">emoji ");
                                               }
-                                            });
+                                            }, Settings.data.appLauncher.overviewLayer);
+    }
+    function windows() {
+      root.screenDetector.withCurrentScreen(screen => {
+                                              var searchText = PanelService.getLauncherSearchText(screen);
+                                              var isInWindowsMode = searchText.startsWith(">win");
+                                              if (!PanelService.isLauncherOpen(screen)) {
+                                                PanelService.openLauncherWithSearch(screen, ">win ");
+                                              } else if (isInWindowsMode) {
+                                                PanelService.closeLauncher(screen);
+                                              } else {
+                                                PanelService.setLauncherSearchText(screen, ">win ");
+                                              }
+                                            }, Settings.data.appLauncher.overviewLayer);
+    }
+    function settings() {
+      root.screenDetector.withCurrentScreen(screen => {
+                                              var searchText = PanelService.getLauncherSearchText(screen);
+                                              var isInSettingsMode = searchText.startsWith(">settings");
+                                              if (!PanelService.isLauncherOpen(screen)) {
+                                                PanelService.openLauncherWithSearch(screen, ">settings ");
+                                              } else if (isInSettingsMode) {
+                                                PanelService.closeLauncher(screen);
+                                              } else {
+                                                PanelService.setLauncherSearchText(screen, ">settings ");
+                                              }
+                                            }, Settings.data.appLauncher.overviewLayer);
     }
   }
 
@@ -207,7 +412,7 @@ Item {
     function lock() {
       // Only lock if not already locked (prevents the red screen issue)
       if (!PanelService.lockScreen.active) {
-        PanelService.lockScreen.active = true;
+        CompositorService.lock();
       }
     }
   }
@@ -233,6 +438,16 @@ Item {
       val = Math.max(0.0, Math.min(1.0, val));
 
       BrightnessService.setBrightness(val);
+    }
+  }
+
+  IpcHandler {
+    target: "monitors"
+    function on() {
+      CompositorService.turnOnMonitors();
+    }
+    function off() {
+      CompositorService.turnOffMonitors();
     }
   }
 
@@ -275,6 +490,21 @@ Item {
     function set(schemeName: string) {
       ColorSchemeService.setPredefinedScheme(schemeName);
     }
+    function setGenerationMethod(method: string) {
+      var valid = false;
+      for (var i = 0; i < TemplateProcessor.schemeTypes.length; i++) {
+        if (TemplateProcessor.schemeTypes[i].key === method) {
+          valid = true;
+          break;
+        }
+      }
+
+      if (valid) {
+        Settings.data.colorSchemes.generationMethod = method;
+      } else {
+        Logger.w("IPC", "Invalid generation method received: " + method);
+      }
+    }
   }
 
   IpcHandler {
@@ -300,19 +530,19 @@ Item {
     function togglePanel() {
       root.screenDetector.withCurrentScreen(screen => {
                                               var panel = PanelService.getPanel("audioPanel", screen);
-                                              panel?.toggle();
+                                              panel?.toggle(null, "Volume");
                                             });
     }
     function openPanel() {
       root.screenDetector.withCurrentScreen(screen => {
                                               var panel = PanelService.getPanel("audioPanel", screen);
-                                              panel?.open();
+                                              panel?.open(null, "Volume");
                                             });
     }
     function closePanel() {
       root.screenDetector.withCurrentScreen(screen => {
                                               var panel = PanelService.getPanel("audioPanel", screen);
-                                              panel?.close();
+                                              panel?.close(null, "Volume");
                                             });
     }
   }
@@ -322,12 +552,22 @@ Item {
     function toggle() {
       root.screenDetector.withCurrentScreen(screen => {
                                               var sessionMenuPanel = PanelService.getPanel("sessionMenuPanel", screen);
+                                              // Session Menu is never open near the bar
                                               sessionMenuPanel?.toggle();
                                             });
     }
 
+    function lock() {
+      if (!PanelService.lockScreen.active) {
+        CompositorService.lock();
+      }
+    }
+
     function lockAndSuspend() {
-      CompositorService.lockAndSuspend();
+      // Only lock and suspend if not already locked
+      if (!PanelService.lockScreen.active) {
+        CompositorService.lockAndSuspend();
+      }
     }
   }
 
@@ -365,9 +605,28 @@ Item {
       }
     }
 
-    function random() {
+    function random(screen: string) {
       if (Settings.data.wallpaper.enabled) {
-        WallpaperService.setRandomWallpaper();
+        if (!screen || screen === "all" || screen.trim().length === 0) {
+          screen = undefined;
+        }
+        WallpaperService.setRandomWallpaper(screen);
+      }
+    }
+
+    function get(screen: string): string {
+      if (screen === "all" || screen === "") {
+        if (Quickshell.screens.length > 1) {
+          return JSON.stringify(WallpaperService.getWallpapersEffectiveMap());
+        }
+        return WallpaperService.getWallpaper(Quickshell.screens[0].name) ?? "";
+      } else {
+        var found = Quickshell.screens.find(s => s.name === screen);
+        if (!found) {
+          Logger.w("IPC", "wallpaper get: unknown screen: " + screen);
+          return "";
+        }
+        return WallpaperService.getWallpaper(screen) ?? "";
       }
     }
 
@@ -376,6 +635,10 @@ Item {
         screen = undefined;
       }
       WallpaperService.changeWallpaper(path, screen);
+    }
+
+    function refresh() {
+      WallpaperService.refreshWallpapersList();
     }
 
     function toggleAutomation() {
@@ -390,31 +653,9 @@ Item {
   }
 
   IpcHandler {
-    target: "batteryManager"
-
-    function cycle() {
-      BatteryService.cycleModes();
-    }
-
-    function set(mode: string) {
-      switch (mode) {
-      case "full":
-        BatteryService.setChargingMode(BatteryService.ChargingMode.Full);
-        break;
-      case "balanced":
-        BatteryService.setChargingMode(BatteryService.ChargingMode.Balanced);
-        break;
-      case "lifespan":
-        BatteryService.setChargingMode(BatteryService.ChargingMode.Lifespan);
-        break;
-      }
-    }
-  }
-
-  IpcHandler {
     target: "wifi"
     function toggle() {
-      NetworkService.setWifiEnabled(!Settings.data.network.wifiEnabled);
+      NetworkService.setWifiEnabled(!NetworkService.wifiEnabled);
     }
     function enable() {
       NetworkService.setWifiEnabled(true);
@@ -429,7 +670,7 @@ Item {
     function togglePanel() {
       root.screenDetector.withCurrentScreen(screen => {
                                               var networkPanel = PanelService.getPanel("networkPanel", screen);
-                                              networkPanel?.toggle(null, "WiFi");
+                                              networkPanel?.toggle(null, "Network");
                                             });
     }
   }
@@ -450,6 +691,28 @@ Item {
                                               var bluetoothPanel = PanelService.getPanel("bluetoothPanel", screen);
                                               bluetoothPanel?.toggle(null, "Bluetooth");
                                             });
+    }
+    function toggleAutoConnect() {
+      Settings.data.network.bluetoothAutoConnect = !Settings.data.network.bluetoothAutoConnect;
+    }
+    function enableAutoConnect() {
+      Settings.data.network.bluetoothAutoConnect = true;
+    }
+    function disableAutoConnect() {
+      Settings.data.network.bluetoothAutoConnect = false;
+    }
+  }
+
+  IpcHandler {
+    target: "airplaneMode"
+    function toggle() {
+      NetworkService.setAirplaneMode(!NetworkService.airplaneModeEnabled);
+    }
+    function enable() {
+      NetworkService.setAirplaneMode(true);
+    }
+    function disable() {
+      NetworkService.setAirplaneMode(false);
     }
   }
 
@@ -497,34 +760,6 @@ Item {
 
     function disableNoctaliaPerformance() {
       PowerProfileService.setNoctaliaPerformance(false);
-    }
-  }
-
-  IpcHandler {
-    target: "toast"
-
-    function send(json: string) {
-      try {
-        var data = JSON.parse(json);
-        var title = data.title || "";
-        var body = data.body || "";
-        var icon = data.icon || "";
-        var type = data.type || "notice";
-        var duration = data.duration;
-
-        switch (type) {
-        case "warning":
-          ToastService.showWarning(title, body, duration ?? 4000);
-          break;
-        case "error":
-          ToastService.showError(title, body, duration ?? 6000);
-          break;
-        default:
-          ToastService.showNotice(title, body, icon, duration ?? 3000);
-        }
-      } catch (error) {
-        Logger.e("IPC", "Failed to parse toast JSON: " + error);
-      }
     }
   }
 
@@ -624,6 +859,7 @@ Item {
     }
     function set(name: string) {
       Settings.data.location.name = name;
+      LocationService.update();
     }
   }
 

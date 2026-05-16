@@ -12,19 +12,35 @@
         }
     ],
     "states": {
+        "a1d94d:at-solaar": {
+            "enabled": true,
+            "sourceUrl": "https://github.com/noctalia-dev/noctalia-plugins"
+        },
         "a1d94d:at-sonarr": {
             "enabled": true,
-            "sourceUrl": "https://github.com/alex-taras/noctalia-plugins"
+            "sourceUrl": "https://github.com/noctalia-dev/noctalia-plugins"
         },
         "a1d94d:at-stonks": {
-            "enabled": true,
-            "sourceUrl": "https://github.com/alex-taras/noctalia-plugins"
+            "enabled": false,
+            "sourceUrl": "https://github.com/noctalia-dev/noctalia-plugins"
         },
         "a1d94d:at-weather": {
             "enabled": true,
-            "sourceUrl": "https://github.com/alex-taras/noctalia-plugins"
+            "sourceUrl": "https://github.com/noctalia-dev/noctalia-plugins"
+        },
+        "currency-exchange": {
+            "enabled": false,
+            "sourceUrl": "https://github.com/noctalia-dev/noctalia-plugins"
         },
         "keybind-cheatsheet": {
+            "enabled": true,
+            "sourceUrl": "https://github.com/noctalia-dev/noctalia-plugins"
+        },
+        "polkit-agent": {
+            "enabled": false,
+            "sourceUrl": "https://github.com/noctalia-dev/noctalia-plugins"
+        },
+        "screen-shot-and-record": {
             "enabled": true,
             "sourceUrl": "https://github.com/noctalia-dev/noctalia-plugins"
         },
@@ -33,5 +49,5 @@
             "sourceUrl": "https://github.com/noctalia-dev/noctalia-plugins"
         }
     },
-    "version": 1
+    "version": 2
 }

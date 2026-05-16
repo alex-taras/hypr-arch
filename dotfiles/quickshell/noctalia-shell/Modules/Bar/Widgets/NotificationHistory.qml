@@ -20,7 +20,7 @@ NIconButton {
   property int sectionWidgetIndex: -1
   property int sectionWidgetsCount: 0
 
-  property var widgetMetadata: BarWidgetRegistry.widgetMetadata[widgetId]
+  property var widgetMetadata: BarWidgetRegistry.widgetMetadata[widgetId] ?? {}
   // Explicit screenName property ensures reactive binding when screen changes
   readonly property string screenName: screen ? screen.name : ""
   property var widgetSettings: {
@@ -32,30 +32,18 @@ NIconButton {
     }
     return {};
   }
-  readonly property bool showUnreadBadge: (widgetSettings.showUnreadBadge !== undefined) ? widgetSettings.showUnreadBadge : widgetMetadata.showUnreadBadge
-  readonly property bool hideWhenZero: (widgetSettings.hideWhenZero !== undefined) ? widgetSettings.hideWhenZero : widgetMetadata.hideWhenZero
-  readonly property bool hideWhenZeroUnread: (widgetSettings.hideWhenZeroUnread !== undefined) ? widgetSettings.hideWhenZeroUnread : widgetMetadata.hideWhenZeroUnread
-  readonly property string unreadBadgeColor: (widgetSettings.unreadBadgeColor !== undefined) ? widgetSettings.unreadBadgeColor : (widgetMetadata.unreadBadgeColor || "primary")
+  readonly property bool showUnreadBadge: widgetSettings.showUnreadBadge !== undefined ? widgetSettings.showUnreadBadge : widgetMetadata.showUnreadBadge
+  readonly property bool hideWhenZero: widgetSettings.hideWhenZero !== undefined ? widgetSettings.hideWhenZero : widgetMetadata.hideWhenZero
+  readonly property bool hideWhenZeroUnread: widgetSettings.hideWhenZeroUnread !== undefined ? widgetSettings.hideWhenZeroUnread : widgetMetadata.hideWhenZeroUnread
+  readonly property string unreadBadgeColor: widgetSettings.unreadBadgeColor !== undefined ? widgetSettings.unreadBadgeColor : widgetMetadata.unreadBadgeColor
+  readonly property string iconColorKey: widgetSettings.iconColor !== undefined ? widgetSettings.iconColor : widgetMetadata.iconColor
 
-  function getColor(colorKey) {
-    switch (colorKey) {
-    case "primary":
-      return Color.mPrimary;
-    case "secondary":
-      return Color.mSecondary;
-    case "tertiary":
-      return Color.mTertiary;
-    case "onSurface":
-      return Color.mOnSurface;
-    default:
-      return Color.mPrimary;
-    }
-  }
+  readonly property color badgeColor: Color.resolveColorKey(unreadBadgeColor)
 
   function computeUnreadCount() {
     var since = NotificationService.lastSeenTs;
     var count = 0;
-    var model = NotificationService.historyList;
+    var model = NotificationService.historyModel;
     for (var i = 0; i < model.count; i++) {
       var item = model.get(i);
       var ts = item.timestamp instanceof Date ? item.timestamp.getTime() : item.timestamp;
@@ -71,16 +59,20 @@ NIconButton {
   applyUiScale: false
   customRadius: Style.radiusL
   icon: NotificationService.doNotDisturb ? "bell-off" : "bell"
-  tooltipText: NotificationService.doNotDisturb ? I18n.tr("tooltips.open-notification-history-enable-dnd") : I18n.tr("tooltips.open-notification-history-enable-dnd")
+  tooltipText: {
+    if (PanelService.getPanel("notificationHistoryPanel", screen)?.isPanelOpen) {
+      return "";
+    } else {
+      return I18n.tr("tooltips.open-notification-history-enable-dnd");
+    }
+  }
   tooltipDirection: BarService.getTooltipDirection(screen?.name)
   colorBg: Style.capsuleColor
-  colorFg: Color.mOnSurface
-  colorBorder: "transparent"
-  colorBorderHover: "transparent"
+  colorFg: Color.resolveColorKey(iconColorKey)
   border.color: Style.capsuleBorderColor
   border.width: Style.capsuleBorderWidth
-  visible: !((hideWhenZero && NotificationService.historyList.count === 0) || (hideWhenZeroUnread && count === 0))
-  opacity: !((hideWhenZero && NotificationService.historyList.count === 0) || (hideWhenZeroUnread && count === 0)) ? 1.0 : 0.0
+  visible: !((hideWhenZero && NotificationService.historyModel.count === 0) || (hideWhenZeroUnread && count === 0))
+  opacity: !((hideWhenZero && NotificationService.historyModel.count === 0) || (hideWhenZeroUnread && count === 0)) ? 1.0 : 0.0
 
   NPopupContextMenu {
     id: contextMenu
@@ -138,7 +130,7 @@ NIconButton {
       height: 7
       width: height
       radius: Style.radiusXS
-      color: root.hovering ? Color.mOnHover : (root.getColor(root.unreadBadgeColor) || Color.mError)
+      color: root.hovering ? Color.mOnHover : (root.badgeColor || Color.mError)
       border.color: Color.mSurface
       border.width: Style.borderS
       visible: count > 0

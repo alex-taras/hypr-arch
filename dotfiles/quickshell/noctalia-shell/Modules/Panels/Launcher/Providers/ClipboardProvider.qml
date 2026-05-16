@@ -2,6 +2,7 @@ import QtQuick
 import Quickshell
 import qs.Commons
 import qs.Services.Keyboard
+import qs.Services.Noctalia
 
 Item {
   id: root
@@ -22,6 +23,28 @@ Item {
 
   // Image handling - expose revision for reactive updates in delegates
   readonly property int imageRevision: ClipboardService.revision
+
+  // Categories
+  property var availableCategories: Settings.data.appLauncher.enableClipboardChips ? ["All", "Images", "Links", "Files", "Code", "Colors"] : []
+  property string selectedCategory: "All"
+
+  function selectCategory(cat) {
+    if (selectedCategory !== cat) {
+      selectedCategory = cat;
+      if (launcher) {
+        launcher.updateResults();
+      }
+    }
+  }
+
+  property var categoryIcons: {
+    "All": iconMode === "tabler" ? "border-all" : "view-grid",
+    "Images": iconMode === "tabler" ? "photo" : "image",
+    "Links": iconMode === "tabler" ? "link" : "insert-link",
+    "Files": iconMode === "tabler" ? "file" : "text-x-generic",
+    "Code": iconMode === "tabler" ? "code" : "text-x-script",
+    "Colors": iconMode === "tabler" ? "palette" : "color-picker"
+  }
 
   // Internal state
   property bool isWaitingForData: false
@@ -46,11 +69,19 @@ Item {
         }
       }
     }
+    function onActiveChanged() {
+      // When active state changes (e.g. dependency check completes), refresh results
+      if (ClipboardService.active && launcher && launcher.searchText.startsWith(">clip")) {
+        isWaitingForData = true;
+        gotResults = false;
+        ClipboardService.list(100);
+      }
+    }
   }
 
   // Initialize provider
   function init() {
-    Logger.i("ClipboardProvider", "Initialized");
+    Logger.d("ClipboardProvider", "Initialized");
     // Pre-load clipboard data if service is active
     if (ClipboardService.active) {
       ClipboardService.list(100);
@@ -80,7 +111,7 @@ Item {
           {
             "name": ">clip",
             "description": I18n.tr("launcher.providers.clipboard-search-description"),
-            "icon": iconMode === "tabler" ? "clipboard" : "text-x-generic",
+            "icon": iconMode === "tabler" ? "clipboard" : "diodon",
             "isTablerIcon": true,
             "isImage": false,
             "onActivate": function () {
@@ -113,6 +144,19 @@ Item {
 
     // Check if clipboard service is not active
     if (!ClipboardService.active) {
+      // If dependency check hasn't completed yet, show loading instead of disabled
+      if (!ClipboardService.dependencyChecked) {
+        return [
+              {
+                "name": I18n.tr("launcher.providers.clipboard-loading"),
+                "description": I18n.tr("launcher.providers.emoji-loading-description"),
+                "icon": iconMode === "tabler" ? "refresh" : "view-refresh",
+                "isTablerIcon": true,
+                "isImage": false,
+                "onActivate": function () {}
+              }
+            ];
+      }
       return [
             {
               "name": I18n.tr("launcher.providers.clipboard-history-disabled"),
@@ -131,7 +175,7 @@ Item {
             {
               "name": I18n.tr("launcher.providers.clipboard-clear-history"),
               "description": I18n.tr("launcher.providers.clipboard-clear-description-full"),
-              "icon": iconMode === "tabler" ? "trash" : "delete_sweep",
+              "icon": iconMode === "tabler" ? "trash" : "user-trash",
               "isTablerIcon": true,
               "isImage": false,
               "onActivate": function () {
@@ -178,8 +222,25 @@ Item {
     // Search clipboard items
     const searchTerm = query.toLowerCase();
 
+    const now = Date.now() / 1000;
+
+    const catMap = {
+      "Images": "image",
+      "Links": "link",
+      "Files": "file",
+      "Code": "code",
+      "Colors": "color"
+    };
+
     // Filter and format results
     items.forEach(function (item) {
+      // Category filter
+      if (Settings.data.appLauncher.enableClipboardChips && root.selectedCategory !== "All") {
+        if (item.contentType !== catMap[root.selectedCategory]) {
+          return;
+        }
+      }
+
       const preview = (item.preview || "").toLowerCase();
 
       // Skip if search term doesn't match
@@ -187,12 +248,14 @@ Item {
         return;
       }
 
+      const firstSeen = ClipboardService.firstSeenById[item.id] || now;
+
       // Format the result based on type
       let entry;
       if (item.isImage) {
-        entry = formatImageEntry(item);
+        entry = formatImageEntry(item, firstSeen);
       } else {
-        entry = formatTextEntry(item);
+        entry = formatTextEntry(item, firstSeen);
       }
 
       // Add activation handler
@@ -228,12 +291,16 @@ Item {
     return results;
   }
 
-  function formatImageEntry(item) {
+  function formatImageEntry(item, firstSeen) {
     const meta = ClipboardService.parseImageMeta(item.preview);
+    const timeStr = Time.formatRelativeTime(new Date(firstSeen * 1000));
+    let desc = meta ? `${meta.fmt} • ${meta.size}` : item.mime || "Image data";
+    if (timeStr)
+      desc += ` • ${timeStr}`;
 
     return {
       "name": meta ? `Image ${meta.w}×${meta.h}` : "Image",
-      "description": meta ? `${meta.fmt} • ${meta.size}` : item.mime || "Image data",
+      "description": desc,
       "icon": iconMode === "tabler" ? "photo" : "image",
       "isTablerIcon": true,
       "isImage": true,
@@ -246,7 +313,7 @@ Item {
     };
   }
 
-  function formatTextEntry(item) {
+  function formatTextEntry(item, firstSeen) {
     const preview = (item.preview || "").trim();
     const lines = preview.split('\n').filter(l => l.trim());
 
@@ -272,14 +339,35 @@ Item {
       }
     }
 
+    const timeStr = Time.formatRelativeTime(new Date(firstSeen * 1000));
+    if (timeStr)
+      description += ` • ${timeStr}`;
+
+    let defaultIcon = iconMode === "tabler" ? "clipboard" : "text-x-generic";
+    let colorHex = "";
+    if (Settings.data.appLauncher.enableClipboardSmartIcons) {
+      if (item.contentType === "link")
+        defaultIcon = iconMode === "tabler" ? "link" : "insert-link";
+      else if (item.contentType === "file")
+        defaultIcon = iconMode === "tabler" ? "file" : "text-x-generic";
+      else if (item.contentType === "code")
+        defaultIcon = iconMode === "tabler" ? "code" : "text-x-script";
+      else if (item.contentType === "color") {
+        defaultIcon = iconMode === "tabler" ? "palette" : "color-picker";
+        colorHex = preview;
+      }
+    }
+
     return {
       "name": title,
       "description": description,
-      "icon": iconMode === "tabler" ? "clipboard" : "text-x-generic",
+      "icon": defaultIcon,
       "isTablerIcon": true,
       "isImage": false,
       "clipboardId": item.id,
       "preview": preview,
+      "contentType": item.contentType,
+      "colorHex": colorHex,
       "provider": root
     };
   }
@@ -297,12 +385,12 @@ Item {
     var actions = [];
 
     // Annotation tool for images
-    if (item.isImage && Settings.data.appLauncher.screenshotAnnotationTool !== "") {
+    if (item.isImage && Settings.data.appLauncher.screenshotAnnotationTool.trim() !== "") {
       actions.push({
                      "icon": "pencil",
                      "tooltip": I18n.tr("tooltips.open-annotation-tool"),
                      "action": function () {
-                       var tool = Settings.data.appLauncher.screenshotAnnotationTool;
+                       var tool = Settings.data.appLauncher.screenshotAnnotationTool.trim();
                        Quickshell.execDetached(["sh", "-c", "cliphist decode " + item.clipboardId + " | " + tool]);
                        if (launcher)
                          launcher.close();

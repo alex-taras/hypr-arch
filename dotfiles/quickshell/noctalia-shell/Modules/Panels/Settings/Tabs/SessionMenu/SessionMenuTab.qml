@@ -38,6 +38,18 @@ ColumnLayout {
       "required": false
     },
     {
+      "id": "userspaceReboot",
+      "text": I18n.tr("common.userspace-reboot"),
+      "enabled": false,
+      "required": false
+    },
+    {
+      "id": "rebootToUefi",
+      "text": I18n.tr("common.reboot-to-uefi"),
+      "enabled": true,
+      "required": false
+    },
+    {
       "id": "logout",
       "text": I18n.tr("common.logout"),
       "enabled": true,
@@ -53,14 +65,42 @@ ColumnLayout {
 
   function saveEntries() {
     var toSave = [];
+    var enabledNumber = 1;
+
     for (var i = 0; i < entriesModel.length; i++) {
+      var keybind = entriesModel[i].keybind || "";
+
+      if (entriesModel[i].enabled) {
+        // For enabled entries with numeric or empty keybinds, assign sequential number
+        if (keybind === "" || /^\d+$/.test(keybind)) {
+          keybind = String(enabledNumber);
+        }
+        enabledNumber++;
+      } else {
+        // For disabled entries with numeric keybinds, clear them
+        if (/^\d+$/.test(keybind)) {
+          keybind = "";
+        }
+      }
+
       toSave.push({
                     "action": entriesModel[i].id,
                     "enabled": entriesModel[i].enabled,
                     "countdownEnabled": entriesModel[i].countdownEnabled !== undefined ? entriesModel[i].countdownEnabled : true,
-                    "command": entriesModel[i].command || ""
+                    "command": entriesModel[i].command || "",
+                    "keybind": keybind
                   });
     }
+
+    // Update local model with renumbered keybinds
+    var newModel = [];
+    for (var i = 0; i < entriesModel.length; i++) {
+      newModel.push(Object.assign({}, entriesModel[i], {
+                                    "keybind": toSave[i].keybind
+                                  }));
+    }
+    entriesModel = newModel;
+
     Settings.data.sessionMenu.powerOptions = toSave;
   }
 
@@ -112,11 +152,9 @@ ColumnLayout {
 
       if (dialog) {
         root._activeDialog = dialog;
-        dialog.updateEntryCommand.connect((idx, command) => {
-                                            root.updateEntry(idx, {
-                                                               "command": command
-                                                             });
-                                          });
+        dialog.updateEntryProperties.connect((idx, properties) => {
+                                               root.updateEntry(idx, properties);
+                                             });
         dialog.closed.connect(() => {
                                 if (root._activeDialog === dialog) {
                                   root._activeDialog = null;
@@ -159,6 +197,7 @@ ColumnLayout {
           entry.countdownEnabled = settingEntry.countdownEnabled !== undefined ? settingEntry.countdownEnabled : true;
           // Load custom command if defined
           entry.command = settingEntry.command || "";
+          entry.keybind = settingEntry.keybind || "";
           entriesModel.push(entry);
         }
       }
@@ -180,6 +219,7 @@ ColumnLayout {
         entry.countdownEnabled = true;
         // Default command to empty string for new entries
         entry.command = "";
+        entry.keybind = "";
         entriesModel.push(entry);
       }
     }

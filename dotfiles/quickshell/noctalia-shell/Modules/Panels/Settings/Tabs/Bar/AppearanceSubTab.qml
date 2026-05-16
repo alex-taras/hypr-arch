@@ -68,6 +68,54 @@ ColumnLayout {
     onSelected: key => Settings.data.bar.density = key
   }
 
+  NComboBox {
+    Layout.fillWidth: true
+    label: I18n.tr("panels.bar.appearance-type-label")
+    description: I18n.tr("panels.bar.appearance-type-description")
+    model: [
+      {
+        "key": "simple",
+        "name": I18n.tr("options.bar.type-simple")
+      },
+      {
+        "key": "floating",
+        "name": I18n.tr("options.bar.type-floating")
+      },
+      {
+        "key": "framed",
+        "name": I18n.tr("options.bar.type-framed")
+      }
+    ]
+    currentKey: Settings.data.bar.barType
+    defaultValue: Settings.getDefaultValue("bar.barType")
+    onSelected: key => {
+                  Settings.data.bar.barType = key;
+                }
+  }
+
+  NComboBox {
+    Layout.fillWidth: true
+    label: I18n.tr("common.display-mode")
+    description: I18n.tr("panels.bar.appearance-display-mode-description")
+    model: [
+      {
+        "key": "always_visible",
+        "name": I18n.tr("hide-modes.visible")
+      },
+      {
+        "key": "non_exclusive",
+        "name": I18n.tr("hide-modes.non-exclusive")
+      },
+      {
+        "key": "auto_hide",
+        "name": I18n.tr("hide-modes.auto-hide")
+      }
+    ]
+    currentKey: Settings.data.bar.displayMode
+    defaultValue: Settings.getDefaultValue("bar.displayMode")
+    onSelected: key => Settings.data.bar.displayMode = key
+  }
+
   NToggle {
     label: I18n.tr("panels.bar.appearance-use-separate-opacity-label")
     description: I18n.tr("panels.bar.appearance-use-separate-opacity-description")
@@ -84,10 +132,53 @@ ColumnLayout {
     from: 0
     to: 1
     stepSize: 0.01
+    showReset: true
     value: Settings.data.bar.backgroundOpacity
     defaultValue: Settings.getDefaultValue("bar.backgroundOpacity")
     onMoved: value => Settings.data.bar.backgroundOpacity = value
     text: Math.floor(Settings.data.bar.backgroundOpacity * 100) + "%"
+  }
+
+  NValueSlider {
+    Layout.fillWidth: true
+    label: I18n.tr("panels.bar.appearance-font-scale-label")
+    description: I18n.tr("panels.bar.appearance-font-scale-description")
+    from: 0.5
+    to: 2.0
+    stepSize: 0.01
+    showReset: true
+    value: Settings.data.bar.fontScale
+    defaultValue: Settings.getDefaultValue("bar.fontScale")
+    onMoved: value => Settings.data.bar.fontScale = value
+    text: Math.floor(Settings.data.bar.fontScale * 100) + "%"
+  }
+
+  NValueSlider {
+    Layout.fillWidth: true
+    label: I18n.tr("panels.bar.appearance-widget-spacing-label")
+    description: I18n.tr("panels.bar.appearance-widget-spacing-description")
+    from: 0
+    to: 30
+    stepSize: 1
+    showReset: true
+    value: Settings.data.bar.widgetSpacing
+    defaultValue: Settings.getDefaultValue("bar.widgetSpacing")
+    onMoved: value => Settings.data.bar.widgetSpacing = value
+    text: Settings.data.bar.widgetSpacing + "px"
+  }
+
+  NValueSlider {
+    Layout.fillWidth: true
+    label: I18n.tr("panels.bar.appearance-content-padding-label")
+    description: I18n.tr("panels.bar.appearance-content-padding-description")
+    from: 0
+    to: 30
+    stepSize: 1
+    showReset: true
+    value: Settings.data.bar.contentPadding
+    defaultValue: Settings.getDefaultValue("bar.contentPadding")
+    onMoved: value => Settings.data.bar.contentPadding = value
+    text: Settings.data.bar.contentPadding + "px"
   }
 
   NToggle {
@@ -108,6 +199,17 @@ ColumnLayout {
     onToggled: checked => Settings.data.bar.showCapsule = checked
   }
 
+  NColorChoice {
+    Layout.fillWidth: true
+    visible: Settings.data.bar.showCapsule
+    label: I18n.tr("panels.bar.appearance-capsule-color-label")
+    description: I18n.tr("panels.bar.appearance-capsule-color-description")
+    noneColor: Color.mSurfaceVariant
+    noneOnColor: Color.mOnSurfaceVariant
+    currentKey: Settings.data.bar.capsuleColorKey
+    onSelected: key => Settings.data.bar.capsuleColorKey = key
+  }
+
   NValueSlider {
     Layout.fillWidth: true
     visible: Settings.data.bar.showCapsule
@@ -116,36 +218,30 @@ ColumnLayout {
     from: 0
     to: 1
     stepSize: 0.01
+    showReset: true
     value: Settings.data.bar.capsuleOpacity
     defaultValue: Settings.getDefaultValue("bar.capsuleOpacity")
     onMoved: value => Settings.data.bar.capsuleOpacity = value
     text: Math.floor(Settings.data.bar.capsuleOpacity * 100) + "%"
   }
 
-  NComboBox {
+  NToggle {
     Layout.fillWidth: true
-    label: I18n.tr("panels.bar.appearance-type-label") ?? "Bar Type"
-    description: I18n.tr("panels.bar.appearance-type-description") ?? "Choose the style of the bar: Simple, Floating or Framed"
-    model: [
-      {
-        "key": "simple",
-        "name": I18n.tr("options.bar.type-simple") ?? "Simple"
-      },
-      {
-        "key": "floating",
-        "name": I18n.tr("options.bar.type-floating") ?? "Floating"
-      },
-      {
-        "key": "framed",
-        "name": I18n.tr("options.bar.type-framed") ?? "Framed"
-      }
-    ]
-    currentKey: Settings.data.bar.barType
-    defaultValue: Settings.getDefaultValue("bar.barType")
-    onSelected: key => {
-                  Settings.data.bar.barType = key;
-                  Settings.data.bar.floating = (key === "floating");
-                }
+    label: I18n.tr("panels.bar.appearance-enable-exclusion-zone-inset-label")
+    description: I18n.tr("panels.bar.appearance-enable-exclusion-zone-inset-description")
+    checked: Settings.data.bar.enableExclusionZoneInset
+    defaultValue: Settings.getDefaultValue("bar.enableExclusionZoneInset")
+    onToggled: checked => Settings.data.bar.enableExclusionZoneInset = checked
+  }
+
+  NToggle {
+    Layout.fillWidth: true
+    visible: CompositorService.isNiri
+    label: I18n.tr("panels.bar.appearance-hide-on-overview-label")
+    description: I18n.tr("panels.bar.appearance-hide-on-overview-description")
+    checked: Settings.data.bar.hideOnOverview
+    defaultValue: Settings.getDefaultValue("bar.hideOnOverview")
+    onToggled: checked => Settings.data.bar.hideOnOverview = checked
   }
 
   NToggle {
@@ -164,8 +260,8 @@ ColumnLayout {
     Layout.fillWidth: true
 
     NLabel {
-      label: I18n.tr("panels.bar.appearance-frame-settings-label") ?? "Frame Settings"
-      description: I18n.tr("panels.bar.appearance-frame-settings-description") ?? "Adjust frame thickness and inner corner radius"
+      label: I18n.tr("panels.bar.appearance-frame-settings-label")
+      description: I18n.tr("panels.bar.appearance-frame-settings-description")
     }
 
     RowLayout {
@@ -174,10 +270,11 @@ ColumnLayout {
 
       NValueSlider {
         Layout.fillWidth: true
-        label: I18n.tr("panels.bar.appearance-frame-thickness") ?? "Thickness"
+        label: I18n.tr("panels.bar.appearance-frame-thickness")
         from: 4
         to: 24
         stepSize: 1
+        showReset: true
         value: Settings.data.bar.frameThickness
         defaultValue: Settings.getDefaultValue("bar.frameThickness")
         onMoved: value => Settings.data.bar.frameThickness = value
@@ -186,10 +283,11 @@ ColumnLayout {
 
       NValueSlider {
         Layout.fillWidth: true
-        label: I18n.tr("panels.bar.appearance-frame-radius") ?? "Inner Radius"
+        label: I18n.tr("panels.bar.appearance-frame-radius")
         from: 4
         to: 24
         stepSize: 1
+        showReset: true
         value: Settings.data.bar.frameRadius
         defaultValue: Settings.getDefaultValue("bar.frameRadius")
         onMoved: value => Settings.data.bar.frameRadius = value
@@ -200,51 +298,82 @@ ColumnLayout {
 
   ColumnLayout {
     visible: Settings.data.bar.barType === "floating"
-    spacing: Style.marginS
+    spacing: Style.marginL
     Layout.fillWidth: true
 
-    NLabel {
-      label: I18n.tr("panels.bar.appearance-margins-label")
-      description: I18n.tr("panels.bar.appearance-margins-description")
+    NDivider {
+      Layout.fillWidth: true
     }
 
-    RowLayout {
-      Layout.fillWidth: true
-      spacing: Style.marginL
+    NSpinBox {
+      label: I18n.tr("panels.bar.appearance-margins-vertical")
+      description: I18n.tr("panels.bar.appearance-margins-description")
+      from: 0
+      to: 500
+      suffix: "px"
+      value: Settings.data.bar.marginVertical
+      defaultValue: Settings.getDefaultValue("bar.marginVertical")
+      onValueChanged: Settings.data.bar.marginVertical = value
+    }
 
-      NValueSlider {
-        Layout.fillWidth: true
-        label: I18n.tr("panels.bar.appearance-margins-vertical")
-        from: 0
-        to: 18
-        stepSize: 1
-        value: Settings.data.bar.marginVertical
-        defaultValue: Settings.getDefaultValue("bar.marginVertical")
-        onMoved: value => Settings.data.bar.marginVertical = value
-        text: Settings.data.bar.marginVertical + "px"
-      }
-
-      NValueSlider {
-        Layout.fillWidth: true
-        label: I18n.tr("panels.bar.appearance-margins-horizontal")
-        from: 0
-        to: 18
-        stepSize: 1
-        value: Settings.data.bar.marginHorizontal
-        defaultValue: Settings.getDefaultValue("bar.marginHorizontal")
-        onMoved: value => Settings.data.bar.marginHorizontal = value
-        text: Settings.data.bar.marginHorizontal + "px"
-      }
+    NSpinBox {
+      label: I18n.tr("panels.bar.appearance-margins-horizontal")
+      description: I18n.tr("panels.bar.appearance-margins-description")
+      from: 0
+      to: 500
+      suffix: "px"
+      value: Settings.data.bar.marginHorizontal
+      defaultValue: Settings.getDefaultValue("bar.marginHorizontal")
+      onValueChanged: Settings.data.bar.marginHorizontal = value
     }
   }
 
-  NToggle {
+  NDivider {
     Layout.fillWidth: true
-    visible: CompositorService.isNiri
-    label: I18n.tr("panels.bar.appearance-hide-on-overview-label")
-    description: I18n.tr("panels.bar.appearance-hide-on-overview-description")
-    checked: Settings.data.bar.hideOnOverview
-    defaultValue: Settings.getDefaultValue("bar.hideOnOverview")
-    onToggled: checked => Settings.data.bar.hideOnOverview = checked
+    Layout.topMargin: Style.marginS
+    visible: Settings.data.bar.displayMode === "auto_hide"
+  }
+
+  ColumnLayout {
+    visible: Settings.data.bar.displayMode === "auto_hide"
+    spacing: Style.marginS
+    Layout.fillWidth: true
+
+    NValueSlider {
+      Layout.fillWidth: true
+      label: I18n.tr("panels.bar.appearance-auto-hide-delay-label")
+      description: I18n.tr("panels.bar.appearance-auto-hide-delay-description")
+      from: 100
+      to: 2000
+      stepSize: 100
+      showReset: true
+      value: Settings.data.bar.autoHideDelay
+      defaultValue: Settings.getDefaultValue("bar.autoHideDelay")
+      onMoved: value => Settings.data.bar.autoHideDelay = value
+      text: Settings.data.bar.autoHideDelay + "ms"
+    }
+
+    NValueSlider {
+      Layout.fillWidth: true
+      label: I18n.tr("panels.bar.appearance-auto-show-delay-label")
+      description: I18n.tr("panels.bar.appearance-auto-show-delay-description")
+      from: 0
+      to: 500
+      stepSize: 50
+      showReset: true
+      value: Settings.data.bar.autoShowDelay
+      defaultValue: Settings.getDefaultValue("bar.autoShowDelay")
+      onMoved: value => Settings.data.bar.autoShowDelay = value
+      text: Settings.data.bar.autoShowDelay + "ms"
+    }
+
+    NToggle {
+      Layout.fillWidth: true
+      label: I18n.tr("panels.bar.appearance-show-on-workspace-switch-label")
+      description: I18n.tr("panels.bar.appearance-show-on-workspace-switch-description")
+      checked: Settings.data.bar.showOnWorkspaceSwitch
+      defaultValue: Settings.getDefaultValue("bar.showOnWorkspaceSwitch")
+      onToggled: checked => Settings.data.bar.showOnWorkspaceSwitch = checked
+    }
   }
 }

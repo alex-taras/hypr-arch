@@ -4,10 +4,11 @@ import Quickshell
 import Quickshell.Wayland
 import qs.Commons
 import qs.Services.Compositor
+import qs.Services.Power
 import qs.Services.UI
 
 Loader {
-  active: CompositorService.isNiri && Settings.data.wallpaper.enabled && Settings.data.wallpaper.overviewEnabled
+  active: CompositorService.isNiri && Settings.data.wallpaper.enabled && Settings.data.wallpaper.overviewEnabled && (!PowerProfileService.noctaliaPerformanceMode || !Settings.data.noctaliaPerformance.disableWallpaper)
 
   sourceComponent: Variants {
     model: Quickshell.screens
@@ -18,9 +19,11 @@ Loader {
       required property ShellScreen modelData
       property string wallpaper: ""
       property string preprocessedWallpaper: "" // Pre-resized wallpaper from Background.qml
-      property bool isSolidColor: false
+      property bool isSolidColor: Settings.data.wallpaper.useSolidColor
       property color solidColor: Settings.data.wallpaper.solidColor
       property color tintColor: Settings.data.colorSchemes.darkMode ? Color.mSurface : Color.mOnSurface
+
+      visible: wallpaper !== "" || isSolidColor
 
       Component.onCompleted: {
         if (modelData) {
@@ -82,6 +85,7 @@ Loader {
         Rectangle {
           anchors.fill: parent
           color: tintColor
+          opacity: Settings.data.wallpaper.overviewTint
         }
       }
 
@@ -97,19 +101,19 @@ Loader {
         cache: true // Shares texture with Background's currentWallpaper
         asynchronous: true
 
-        layer.enabled: true
+        layer.enabled: Settings.data.wallpaper.overviewBlur > 0 && !PowerProfileService.noctaliaPerformanceMode
         layer.smooth: false
         layer.effect: MultiEffect {
           blurEnabled: true
-          blur: 1.0
-          blurMax: 32
+          blur: Settings.data.wallpaper.overviewBlur
+          blurMax: 48
         }
 
         // Tint overlay
         Rectangle {
           anchors.fill: parent
           color: tintColor
-          opacity: 0.6
+          opacity: Settings.data.wallpaper.overviewTint
         }
       }
     }

@@ -12,13 +12,14 @@ Supported scheme types:
 - monochrome: Pure grayscale M3 scheme (chroma = 0, only error has color)
 - vibrant: Prioritizes the most saturated colors regardless of area coverage
 - faithful: Prioritizes dominant colors by area, what you see is what you get
+- dysfunctional: Like faithful but picks the 2nd most dominant color family
 - muted: Preserves hue but caps saturation low (for monochrome/monotonal wallpapers)
 
 Usage:
     python3 template-processor.py IMAGE_OR_JSON [OPTIONS]
 
 Options:
-    --scheme-type    Scheme type: tonal-spot (default), content, fruit-salad, rainbow, monochrome, vibrant, faithful, muted
+    --scheme-type    Scheme type: tonal-spot (default), content, fruit-salad, rainbow, monochrome, vibrant, faithful, dysfunctional, muted
     --dark           Generate dark theme only
     --light          Generate light theme only
     --both           Generate both themes (default)
@@ -53,8 +54,8 @@ from lib import (
     read_image, ImageReadError, extract_palette, generate_theme,
     TemplateRenderer, expand_predefined_scheme,
     extract_source_color, source_color_to_rgb, Color,
-    TerminalColors, TerminalGenerator
 )
+from lib.scheme import inject_terminal_colors
 
 
 def parse_args() -> argparse.Namespace:
@@ -83,7 +84,7 @@ Examples:
     # Scheme type selection
     parser.add_argument(
         '--scheme-type',
-        choices=['tonal-spot', 'content', 'fruit-salad', 'rainbow', 'monochrome', 'vibrant', 'faithful', 'muted'],
+        choices=['tonal-spot', 'content', 'fruit-salad', 'rainbow', 'monochrome', 'vibrant', 'faithful', 'dysfunctional', 'muted'],
         default='tonal-spot',
         help='Color scheme type (default: tonal-spot)'
     )
@@ -143,12 +144,6 @@ Examples:
         help='Theme mode to use for "default" in templates (default: dark)'
     )
 
-    parser.add_argument(
-        '--terminal-output',
-        type=str,
-        help='JSON mapping of terminal IDs to output paths: {"foot": "/path/to/output", ...}'
-    )
-
     return parser.parse_args()
 
 
@@ -187,9 +182,11 @@ def main() -> int:
                 if mode in scheme_data:
                     # Multi-mode format
                     result[mode] = expand_predefined_scheme(scheme_data[mode], mode)
+                    inject_terminal_colors(result[mode], scheme_data[mode])
                 elif "mPrimary" in scheme_data:
                     # Single-mode format - use same colors for requested mode
                     result[mode] = expand_predefined_scheme(scheme_data, mode)
+                    inject_terminal_colors(result[mode], scheme_data)
                 else:
                     print(f"Error: Invalid scheme format - missing '{mode}' or 'mPrimary'", file=sys.stderr)
                     return 1
@@ -250,8 +247,16 @@ def main() -> int:
                 print(f"Error: Not a file: {args.image}", file=sys.stderr)
                 return 1
 
+            # Determine scheme type
+            scheme_type = args.scheme_type
+
+            # M3 schemes use Triangle filter (matches matugen), others use Box
+            # (sharper downscale preserves distinct color regions for k-means)
+            m3_schemes = {"tonal-spot", "content", "fruit-salad", "rainbow", "monochrome"}
+            resize_filter = "Triangle" if scheme_type in m3_schemes else "Box"
+
             try:
-                pixels = read_image(args.image)
+                pixels = read_image(args.image, resize_filter)
             except ImageReadError as e:
                 print(f"Error reading image: {e}", file=sys.stderr)
                 return 1
@@ -259,14 +264,12 @@ def main() -> int:
                 print(f"Unexpected error reading image: {e}", file=sys.stderr)
                 return 1
 
-            # Determine scheme type
-            scheme_type = args.scheme_type
-
             # Extract palette based on scheme type:
             # - M3 schemes (tonal-spot, fruit-salad, rainbow, content): Use Wu quantizer + Score
             #   This matches matugen's color extraction exactly
             # - vibrant: Use k-means clustering for colorful/blended colors
             # - faithful: Use Wu quantizer for primary (dominant by area), k-means for accents
+            # - dysfunctional: Like faithful but picks 2nd most dominant color family
             # - muted: Like count but without chroma filtering (for monochrome wallpapers)
             if scheme_type == "vibrant":
                 # K-means with chroma scoring for vibrant, blended colors
@@ -275,6 +278,10 @@ def main() -> int:
                 # K-means with count scoring - picks dominant color by area coverage
                 # This ensures primary reflects what you actually see in the image
                 palette = extract_palette(pixels, k=5, scoring="count")
+            elif scheme_type == "dysfunctional":
+                # K-means with dysfunctional scoring - picks 2nd most dominant color family
+                # For when the dominant color is not what you want as primary
+                palette = extract_palette(pixels, k=5, scoring="dysfunctional")
             elif scheme_type == "muted":
                 # K-means with muted scoring - accepts low/zero chroma colors
                 # For monochrome/monotonal wallpapers where dominant color has low saturation
@@ -332,52 +339,6 @@ def main() -> int:
                 print(f"Error: Config file not found: {args.config}", file=sys.stderr)
             else:
                 renderer.process_config_file(args.config)
-
-    # Process terminal output if specified
-    if args.terminal_output and args.scheme:
-        try:
-            terminal_outputs = json.loads(args.terminal_output)
-        except json.JSONDecodeError as e:
-            print(f"Error parsing --terminal-output JSON: {e}", file=sys.stderr)
-            return 1
-
-        # Load scheme to check for terminal section
-        with open(args.scheme, 'r') as f:
-            scheme_data = json.load(f)
-
-        # Determine which mode to use for terminal colors
-        mode = args.default_mode
-
-        # Check if scheme has terminal colors
-        mode_data = scheme_data.get(mode, scheme_data)
-        if "terminal" not in mode_data:
-            print(f"Warning: Scheme has no 'terminal' section for mode '{mode}'", file=sys.stderr)
-            return 0
-
-        try:
-            # Extract scheme UI colors for derivation (mPrimary, mOnPrimary, mSecondary)
-            scheme_colors = {
-                "mPrimary": mode_data.get("mPrimary"),
-                "mOnPrimary": mode_data.get("mOnPrimary"),
-                "mSecondary": mode_data.get("mSecondary"),
-            }
-            terminal_colors = TerminalColors.from_dict(mode_data["terminal"], scheme_colors)
-            generator = TerminalGenerator(terminal_colors)
-
-            for terminal_id, output_path in terminal_outputs.items():
-                try:
-                    content = generator.generate(terminal_id)
-                    output_file = Path(output_path).expanduser()
-                    output_file.parent.mkdir(parents=True, exist_ok=True)
-                    output_file.write_text(content)
-                except ValueError as e:
-                    print(f"Error generating {terminal_id}: {e}", file=sys.stderr)
-                except IOError as e:
-                    print(f"Error writing {output_path}: {e}", file=sys.stderr)
-
-        except KeyError as e:
-            print(f"Error: Missing required terminal color: {e}", file=sys.stderr)
-            return 1
 
     return 0
 

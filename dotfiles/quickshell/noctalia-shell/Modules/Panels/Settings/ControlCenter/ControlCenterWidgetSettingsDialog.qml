@@ -14,15 +14,15 @@ Popup {
   property string widgetId: ""
   property string sectionId: ""
   property var screen: null
+  property var settingsCache: ({})
 
   signal updateWidgetSettings(string section, int index, var settings)
 
-  readonly property real maxHeight: screen ? screen.height * 0.9 : 800
+  readonly property real maxHeight: (screen ? screen.height : (parent ? parent.height : 800)) * 0.8
   readonly property real defaultContentWidth: Math.round(600 * Style.uiScaleRatio)
   readonly property real settingsContentWidth: {
     if (settingsLoader.item && settingsLoader.item.implicitWidth > 0) {
       return settingsLoader.item.implicitWidth;
-      d;
     }
     return defaultContentWidth;
   }
@@ -32,6 +32,7 @@ Popup {
   height: Math.min(content.implicitHeight + dialogPadding * 2, maxHeight)
   padding: 0
   modal: true
+  closePolicy: Popup.NoAutoClose
   anchors.centerIn: parent
 
   onOpened: {
@@ -113,14 +114,24 @@ Popup {
     }
   }
 
+  Timer {
+    id: saveTimer
+    running: false
+    interval: 150
+    onTriggered: {
+      root.updateWidgetSettings(root.sectionId, root.widgetIndex, root.settingsCache);
+    }
+  }
+
   Connections {
     target: settingsLoader.item
+    ignoreUnknownSignals: true
     function onSettingsChanged(newSettings) {
       if (newSettings) {
-        root.updateWidgetSettings(root.sectionId, root.widgetIndex, newSettings);
+        root.settingsCache = newSettings;
+        saveTimer.start();
       }
     }
-    ignoreUnknownSignals: true
   }
 
   function saveAndClose() {

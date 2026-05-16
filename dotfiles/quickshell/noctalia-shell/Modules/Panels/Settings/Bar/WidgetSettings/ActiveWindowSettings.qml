@@ -9,6 +9,7 @@ ColumnLayout {
   spacing: Style.marginM
 
   // Properties to receive data from parent
+  property var screen: null
   property var widgetData: null
   property var widgetMetadata: null
 
@@ -16,11 +17,13 @@ ColumnLayout {
 
   // Local state
   property bool valueShowIcon: widgetData.showIcon !== undefined ? widgetData.showIcon : widgetMetadata.showIcon
-  property string valueHideMode: "hidden" // Default to 'Hide When Empty'
+  property bool valueShowText: widgetData.showText !== undefined ? widgetData.showText : widgetMetadata.showText
+  property string valueHideMode: widgetData.hideMode !== undefined ? widgetData.hideMode : widgetMetadata.hideMode
   property string valueScrollingMode: widgetData.scrollingMode || widgetMetadata.scrollingMode
   property int valueMaxWidth: widgetData.maxWidth !== undefined ? widgetData.maxWidth : widgetMetadata.maxWidth
   property bool valueUseFixedWidth: widgetData.useFixedWidth !== undefined ? widgetData.useFixedWidth : widgetMetadata.useFixedWidth
   property bool valueColorizeIcons: widgetData.colorizeIcons !== undefined ? widgetData.colorizeIcons : widgetMetadata.colorizeIcons
+  property string valueTextColor: widgetData.textColor !== undefined ? widgetData.textColor : widgetMetadata.textColor
 
   Component.onCompleted: {
     if (widgetData && widgetData.hideMode !== undefined) {
@@ -32,11 +35,13 @@ ColumnLayout {
     var settings = Object.assign({}, widgetData || {});
     settings.hideMode = valueHideMode;
     settings.showIcon = valueShowIcon;
+    settings.showText = valueShowText;
     settings.scrollingMode = valueScrollingMode;
     settings.maxWidth = parseInt(widthInput.text) || widgetMetadata.maxWidth;
     settings.useFixedWidth = valueUseFixedWidth;
     settings.colorizeIcons = valueColorizeIcons;
-    return settings;
+    settings.textColor = valueTextColor;
+    settingsChanged(settings);
   }
 
   NComboBox {
@@ -60,8 +65,31 @@ ColumnLayout {
     currentKey: root.valueHideMode
     onSelected: key => {
                   root.valueHideMode = key;
-                  settingsChanged(saveSettings());
+                  saveSettings();
                 }
+    defaultValue: widgetMetadata.hideMode
+  }
+
+  NColorChoice {
+    label: I18n.tr("common.select-color")
+    currentKey: valueTextColor
+    onSelected: key => {
+                  valueTextColor = key;
+                  saveSettings();
+                }
+    defaultValue: widgetMetadata.textColor
+  }
+
+  NToggle {
+    Layout.fillWidth: true
+    label: I18n.tr("bar.active-window.show-app-text-label")
+    description: I18n.tr("bar.active-window.show-app-text-description")
+    checked: root.valueShowText
+    onToggled: checked => {
+                 root.valueShowText = checked;
+                 saveSettings();
+               }
+    defaultValue: widgetMetadata.showText
   }
 
   NToggle {
@@ -71,8 +99,9 @@ ColumnLayout {
     checked: root.valueShowIcon
     onToggled: checked => {
                  root.valueShowIcon = checked;
-                 settingsChanged(saveSettings());
+                 saveSettings();
                }
+    defaultValue: widgetMetadata.showIcon
   }
 
   NToggle {
@@ -82,8 +111,10 @@ ColumnLayout {
     checked: root.valueColorizeIcons
     onToggled: checked => {
                  root.valueColorizeIcons = checked;
-                 settingsChanged(saveSettings());
+                 saveSettings();
                }
+    visible: root.valueShowIcon
+    defaultValue: widgetMetadata.colorizeIcons
   }
 
   NTextInput {
@@ -93,7 +124,8 @@ ColumnLayout {
     description: I18n.tr("bar.media-mini.max-width-description")
     placeholderText: widgetMetadata.maxWidth
     text: valueMaxWidth
-    onEditingFinished: settingsChanged(saveSettings())
+    onTextChanged: saveSettings()
+    defaultValue: String(widgetMetadata.maxWidth)
   }
 
   NToggle {
@@ -103,8 +135,9 @@ ColumnLayout {
     checked: valueUseFixedWidth
     onToggled: checked => {
                  valueUseFixedWidth = checked;
-                 settingsChanged(saveSettings());
+                 saveSettings();
                }
+    defaultValue: widgetMetadata.useFixedWidth
   }
 
   NComboBox {
@@ -125,9 +158,10 @@ ColumnLayout {
       }
     ]
     currentKey: valueScrollingMode
+    defaultValue: widgetMetadata.scrollingMode
     onSelected: key => {
                   valueScrollingMode = key;
-                  settingsChanged(saveSettings());
+                  saveSettings();
                 }
     minimumWidth: 200
   }

@@ -15,6 +15,20 @@ Item {
   readonly property string section: widgetProps ? (widgetProps.section || "") : ""
   readonly property int sectionIndex: widgetProps ? (widgetProps.sectionWidgetIndex || 0) : 0
 
+  // Store registration key at registration time so unregistration always uses the correct key,
+  // even if binding properties (section, sectionIndex) have changed by destruction time
+  property string _regScreen: ""
+  property string _regSection: ""
+  property string _regWidgetId: ""
+  property int _regIndex: -1
+
+  function _unregister() {
+    if (_regScreen !== "") {
+      BarService.unregisterWidget(_regScreen, _regSection, _regWidgetId, _regIndex);
+      _regScreen = "";
+    }
+  }
+
   // Bar orientation and height for extended click areas
   readonly property string barPosition: Settings.getBarPositionForScreen(widgetScreen?.name)
   readonly property bool isVerticalBar: barPosition === "left" || barPosition === "right"
@@ -47,24 +61,78 @@ Item {
     enabled: BarWidgetRegistry.isPluginWidget(root.widgetId)
 
     function onPluginWidgetRegistryUpdated() {
-      // Force the loader to reload by toggling active
       if (BarWidgetRegistry.hasWidget(root.widgetId)) {
         root.reloadCounter++;
+        // Plugin widgets use setSource, so also trigger reload directly
+        if (root._isPlugin && loader.active)
+          root._loadWidget();
         Logger.d("BarWidgetLoader", "Plugin widget registry updated, reloading:", root.widgetId);
       }
+    }
+  }
+
+  readonly property bool _isPlugin: BarWidgetRegistry.isPluginWidget(widgetId)
+
+  // Build initial properties that must be available during Component.onCompleted.
+  // This prevents registration-key mismatches in widgets that build IDs from
+  // screen.name, section, or sectionWidgetIndex.
+  // All standard bar widget props are passed for both core and plugin widgets.
+  // Plugins that don't define some of these properties will get harmless warnings
+  // but still load correctly — and plugins that DO define them (e.g. for unique
+  // SpectrumService keys with multiple instances) get correct values from the start.
+  function _initialProps() {
+    return {
+      "screen": widgetScreen,
+      "widgetId": widgetProps.widgetId || "",
+      "section": widgetProps.section || "",
+      "sectionWidgetIndex": widgetProps.sectionWidgetIndex || 0,
+      "sectionWidgetsCount": widgetProps.sectionWidgetsCount || 0
+    };
+  }
+
+  // Core widget URLs: file names match widget IDs exactly
+  readonly property string _barWidgetsDir: Quickshell.shellDir + "/Modules/Bar/Widgets/"
+
+  function _loadWidget() {
+    if (!BarWidgetRegistry.hasWidget(root.widgetId))
+      return;
+
+    var props = _initialProps();
+
+    if (_isPlugin) {
+      var comp = BarWidgetRegistry.getWidget(root.widgetId);
+      if (!comp)
+        return;
+      var pluginId = root.widgetId.replace("plugin:", "");
+      var api = PluginService.getPluginAPI(pluginId);
+      if (api)
+        props.pluginApi = api;
+      loader.setSource(comp.url, props);
+    } else {
+      loader.setSource(_barWidgetsDir + root.widgetId + ".qml", props);
     }
   }
 
   Loader {
     id: loader
     anchors.fill: parent
-    asynchronous: false
-    // Include reloadCounter in the binding to force re-evaluation
+    asynchronous: true
     active: root.checkWidgetExists() && (root.reloadCounter >= 0)
-    sourceComponent: {
-      // Depend on reloadCounter to force re-fetch of component
-      var _ = root.reloadCounter;
-      return root.checkWidgetExists() ? BarWidgetRegistry.getWidget(root.widgetId) : null;
+
+    // All widgets use setSource() so that screen and widget properties
+    // are set as initial properties, available during Component.onCompleted.
+    Component.onCompleted: root._loadWidget()
+
+    onActiveChanged: {
+      if (active)
+        root._loadWidget();
+    }
+
+    // Unregister when the loaded item is destroyed (Loader deactivated or sourceComponent changed)
+    onItemChanged: {
+      if (!item) {
+        root._unregister();
+      }
     }
 
     onLoaded: {
@@ -86,31 +154,22 @@ Item {
         });
       }
 
-      // Apply properties to loaded widget
+      // Apply remaining widget properties (screen is already set as initial prop)
       for (var prop in widgetProps) {
         if (item.hasOwnProperty(prop)) {
           item[prop] = widgetProps[prop];
         }
       }
 
-      // Set screen property
-      if (item.hasOwnProperty("screen")) {
-        item.screen = widgetScreen;
-      }
+      // Unregister any previous registration before registering the new instance
+      root._unregister();
 
-      // Inject plugin API for plugin widgets
-      // The API is fully populated (settings/translations already loaded) by PluginService
-      if (BarWidgetRegistry.isPluginWidget(widgetId)) {
-        var pluginId = widgetId.replace("plugin:", "");
-        var api = PluginService.getPluginAPI(pluginId);
-        if (api && item.hasOwnProperty("pluginApi")) {
-          item.pluginApi = api;
-          Logger.d("BarWidgetLoader", "Injected plugin API for", widgetId);
-        }
-      }
-
-      // Register this widget instance with BarService
+      // Register and store the key for reliable unregistration
       BarService.registerWidget(widgetScreen.name, section, widgetId, sectionIndex, item);
+      root._regScreen = widgetScreen.name;
+      root._regSection = section;
+      root._regWidgetId = widgetId;
+      root._regIndex = sectionIndex;
 
       // Call custom onLoaded if it exists
       if (item.hasOwnProperty("onLoaded")) {
@@ -119,10 +178,7 @@ Item {
     }
 
     Component.onDestruction: {
-      // Unregister when destroyed
-      if (widgetScreen && section) {
-        BarService.unregisterWidget(widgetScreen.name, section, widgetId, sectionIndex);
-      }
+      root._unregister();
     }
   }
 

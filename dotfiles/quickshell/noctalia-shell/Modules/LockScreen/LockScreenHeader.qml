@@ -8,6 +8,28 @@ import qs.Widgets
 // Time, Date, and User Profile Container
 Rectangle {
   id: root
+
+  readonly property bool animationsEnabled: Settings.data.general.lockScreenAnimations || false
+
+  // Use timer-driven properties instead of Time.now to avoid per-frame repaints.
+  // Time.now updates every frame (~60+ Hz); these update only when needed.
+  property date currentTime: new Date()
+  property date currentDate: new Date()
+
+  Timer {
+    interval: 1000
+    running: true
+    repeat: true
+    onTriggered: root.currentTime = new Date()
+  }
+
+  Timer {
+    interval: 60000
+    running: true
+    repeat: true
+    onTriggered: root.currentDate = new Date()
+  }
+
   width: Math.max(500, contentRow.implicitWidth + 32)
   height: Math.max(120, contentRow.implicitHeight + 32)
   anchors.horizontalCenter: parent.horizontalCenter
@@ -22,7 +44,7 @@ Rectangle {
     id: contentRow
     anchors.fill: parent
     anchors.margins: Style.marginL
-    spacing: Style.marginXL * 2
+    spacing: Style.margin2XL
 
     // Left side: Avatar
     Rectangle {
@@ -41,6 +63,7 @@ Rectangle {
 
         SequentialAnimation on border.color {
           loops: Animation.Infinite
+          running: root.animationsEnabled
           ColorAnimation {
             to: Qt.alpha(Color.mPrimary, 1.0)
             duration: 2000
@@ -64,6 +87,7 @@ Rectangle {
 
         SequentialAnimation on scale {
           loops: Animation.Infinite
+          running: root.animationsEnabled
           NumberAnimation {
             to: 1.02
             duration: 4000
@@ -94,20 +118,7 @@ Rectangle {
       // Date below
       NText {
         text: {
-          var lang = I18n.locale.name.split("_")[0];
-          var formats = {
-            "de": "dddd, d. MMMM",
-            "en": "dddd, MMMM d",
-            "es": "dddd, d 'de' MMMM",
-            "fr": "dddd d MMMM",
-            "hu": "dddd, MMMM d.",
-            "ja": "yyyy年M月d日 dddd",
-            "ku": "dddd, dê MMMM",
-            "nl": "dddd d MMMM",
-            "pt": "dddd, d 'de' MMMM",
-            "zh": "yyyy年M月d日 dddd"
-          };
-          var dateString = I18n.locale.toString(Time.now, formats[lang] || "dddd, d MMMM");
+          var dateString = I18n.locale.toString(root.currentDate, I18n.dateFormat());
           return dateString.charAt(0).toUpperCase() + dateString.slice(1);
         }
         pointSize: Style.fontSizeXL
@@ -122,17 +133,64 @@ Rectangle {
     }
 
     // Clock
-    NClock {
-      now: Time.now
-      clockStyle: Settings.data.location.analogClockInCalendar ? "analog" : "digital"
-      Layout.preferredWidth: 70
-      Layout.preferredHeight: 70
+    Item {
+      Layout.preferredWidth: Settings.data.general.clockStyle === "analog" ? 70 : (Settings.data.general.clockStyle === "custom" ? 90 : 70)
+      Layout.preferredHeight: Settings.data.general.clockStyle === "analog" ? 70 : (Settings.data.general.clockStyle === "custom" ? 90 : 70)
       Layout.alignment: Qt.AlignVCenter
-      backgroundColor: Color.mSurface
-      clockColor: Color.mOnSurface
-      secondHandColor: Color.mPrimary
-      hoursFontSize: Style.fontSizeL
-      minutesFontSize: Style.fontSizeL
+
+      // Analog Clock
+      NClock {
+        anchors.centerIn: parent
+        width: 70
+        height: 70
+        visible: Settings.data.general.clockStyle === "analog"
+        now: root.currentTime
+        clockStyle: "analog"
+        backgroundColor: "transparent"
+        clockColor: Color.mOnSurface
+        secondHandColor: Color.mPrimary
+      }
+
+      // Digital Clock (Standard)
+      NClock {
+        anchors.centerIn: parent
+        width: 70
+        height: 70
+        visible: Settings.data.general.clockStyle === "digital"
+        now: root.currentTime
+        clockStyle: "digital"
+        showProgress: true
+        progressColor: Color.mPrimary
+        backgroundColor: "transparent"
+        clockColor: Color.mOnSurface
+        hoursFontSize: Style.fontSizeL
+        minutesFontSize: Style.fontSizeL
+        hoursFontWeight: Style.fontWeightBold
+        minutesFontWeight: Style.fontWeightBold
+      }
+
+      // Custom Clock (Stacked)
+      ColumnLayout {
+        anchors.centerIn: parent
+        width: parent.width
+        visible: Settings.data.general.clockStyle === "custom"
+        spacing: -3
+
+        Repeater {
+          model: I18n.locale.toString(root.currentTime, (Settings.data.general.clockFormat || "hh\\nmm").replace(/\\n/g, "\n")).split("\n")
+          NText {
+            text: modelData
+            pointSize: Style.fontSizeL
+            font.weight: Style.fontWeightBold
+            color: Color.mOnSurface
+            wrapMode: Text.WordWrap
+            horizontalAlignment: Text.AlignHCenter
+            Layout.alignment: Qt.AlignHCenter
+            Layout.maximumWidth: parent.width
+            Layout.fillWidth: true
+          }
+        }
+      }
     }
   }
 }

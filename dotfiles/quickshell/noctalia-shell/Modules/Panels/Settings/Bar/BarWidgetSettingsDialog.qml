@@ -15,15 +15,18 @@ Popup {
   property string widgetId: ""
   property string sectionId: ""
   property var screen: null
+  property bool barIsVertical: false
+  property var settingsCache: ({})
+
+  readonly property real maxHeight: (screen ? screen.height : (parent ? parent.height : 800)) * 0.8
 
   signal updateWidgetSettings(string section, int index, var settings)
-
-  readonly property real maxHeight: screen ? screen.height * 0.9 : 800
 
   width: Math.max(content.implicitWidth + padding * 2, 640)
   height: Math.min(content.implicitHeight + padding * 2, maxHeight)
   padding: Style.marginXL
   modal: true
+  closePolicy: Popup.NoAutoClose
   dim: false
   anchors.centerIn: parent
 
@@ -141,14 +144,24 @@ Popup {
     }
   }
 
+  Timer {
+    id: saveTimer
+    running: false
+    interval: 150
+    onTriggered: {
+      root.updateWidgetSettings(root.sectionId, root.widgetIndex, root.settingsCache);
+    }
+  }
+
   Connections {
     target: settingsLoader.item
+    ignoreUnknownSignals: true
     function onSettingsChanged(newSettings) {
       if (newSettings) {
-        root.updateWidgetSettings(root.sectionId, root.widgetIndex, newSettings);
+        root.settingsCache = newSettings;
+        saveTimer.start();
       }
     }
-    ignoreUnknownSignals: true
   }
 
   function saveAndClose() {
@@ -172,6 +185,7 @@ Popup {
         }
       }
       settingsLoader.setSource(source, {
+                                 "screen": screen,
                                  "widgetData": currentWidgetData,
                                  "widgetMetadata": BarWidgetRegistry.widgetMetadata[widgetId]
                                });

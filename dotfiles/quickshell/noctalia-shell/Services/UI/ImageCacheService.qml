@@ -20,7 +20,6 @@ Singleton {
   readonly property string baseDir: Settings.cacheDir + "images/"
   readonly property string wpThumbDir: baseDir + "wallpapers/thumbnails/"
   readonly property string wpLargeDir: baseDir + "wallpapers/large/"
-  readonly property string wpOverviewDir: baseDir + "wallpapers/overview/"
   readonly property string notificationsDir: baseDir + "notifications/"
   readonly property string contributorsDir: baseDir + "contributors/"
 
@@ -73,17 +72,16 @@ Singleton {
   function createDirectories() {
     Quickshell.execDetached(["mkdir", "-p", wpThumbDir]);
     Quickshell.execDetached(["mkdir", "-p", wpLargeDir]);
-    Quickshell.execDetached(["mkdir", "-p", wpOverviewDir]);
     Quickshell.execDetached(["mkdir", "-p", notificationsDir]);
     Quickshell.execDetached(["mkdir", "-p", contributorsDir]);
   }
 
   function cleanupOldCache() {
-    const dirs = [wpThumbDir, wpLargeDir, wpOverviewDir, notificationsDir, contributorsDir];
+    const dirs = [wpThumbDir, wpLargeDir, notificationsDir, contributorsDir];
     dirs.forEach(function (dir) {
-      Quickshell.execDetached(["find", dir, "-type", "f", "-mtime", "+30", "-delete"]);
+      Quickshell.execDetached(["find", dir, "-type", "f", "-mtime", "+15", "-delete"]);
     });
-    Logger.d("ImageCache", "Cleanup triggered for files older than 30 days");
+    Logger.d("ImageCache", "Cleanup triggered for files older than 15 days");
   }
 
   // -------------------------------------------------
@@ -115,6 +113,11 @@ Singleton {
   function getLarge(sourcePath, width, height, callback) {
     if (!sourcePath || sourcePath === "") {
       callback("", false);
+      return;
+    }
+
+    if (Settings.data.wallpaper.useOriginalImages && !needsConversion(sourcePath)) {
+      callback(sourcePath, false);
       return;
     }
 
@@ -162,8 +165,11 @@ Singleton {
       return;
     }
 
-    // File paths are used directly, not cached
-    if (imageUri.startsWith("/") || imageUri.startsWith("file://")) {
+    // Resolve bare file path for temp check
+    const filePath = imageUri.startsWith("file://") ? imageUri.substring(7) : imageUri;
+
+    // File paths in persistent locations are used directly, not cached
+    if ((imageUri.startsWith("/") || imageUri.startsWith("file://")) && !isTemporaryPath(filePath)) {
       callback(imageUri, false);
       return;
     }
@@ -171,10 +177,57 @@ Singleton {
     const cacheKey = generateNotificationKey(imageUri, appName, summary);
     const cachedPath = notificationsDir + cacheKey + ".png";
 
+    // Temporary file paths are copied to cache before the source is cleaned up
+    if (imageUri.startsWith("/") || imageUri.startsWith("file://")) {
+      processRequest(cacheKey, cachedPath, imageUri, callback, function () {
+        copyTempFileToCache(filePath, cachedPath, cacheKey);
+      });
+      return;
+    }
+
     processRequest(cacheKey, cachedPath, imageUri, callback, function () {
       // Notifications always use Qt fallback (image:// URIs can't be read by ImageMagick)
       queueFallbackProcessing(imageUri, cachedPath, cacheKey, 64);
     });
+  }
+
+  // Check if a path is in a temporary directory that may be cleaned up
+  function isTemporaryPath(path) {
+    return path.startsWith("/tmp/");
+  }
+
+  // Copy a temporary file to the cache directory
+  function copyTempFileToCache(sourcePath, destPath, cacheKey) {
+    const srcEsc = sourcePath.replace(/'/g, "'\\''");
+    const dstEsc = destPath.replace(/'/g, "'\\''");
+
+    const processString = `
+      import QtQuick
+      import Quickshell.Io
+      Process {
+        command: ["cp", "--", "${srcEsc}", "${dstEsc}"]
+        stdout: StdioCollector {}
+        stderr: StdioCollector {}
+      }
+    `;
+
+    queueUtilityProcess({
+                          name: "CopyTempFile_" + cacheKey,
+                          processString: processString,
+                          onComplete: function (exitCode) {
+                            if (exitCode === 0) {
+                              Logger.d("ImageCache", "Temp file cached:", destPath);
+                              notifyCallbacks(cacheKey, destPath, true);
+                            } else {
+                              Logger.w("ImageCache", "Failed to cache temp file:", sourcePath);
+                              notifyCallbacks(cacheKey, "", false);
+                            }
+                          },
+                          onError: function () {
+                            Logger.e("ImageCache", "Error caching temp file:", sourcePath);
+                            notifyCallbacks(cacheKey, "", false);
+                          }
+                        });
   }
 
   // -------------------------------------------------
@@ -201,31 +254,6 @@ Singleton {
   }
 
   // -------------------------------------------------
-  // Public API: Get Blurred Overview (for Niri overview background)
-  // -------------------------------------------------
-  function getBlurredOverview(sourcePath, width, height, tintColor, isDarkMode, callback) {
-    if (!sourcePath || sourcePath === "") {
-      callback("", false);
-      return;
-    }
-
-    if (!imageMagickAvailable) {
-      Logger.d("ImageCache", "ImageMagick not available for overview blur, using original:", sourcePath);
-      callback(sourcePath, false);
-      return;
-    }
-
-    getMtime(sourcePath, function (mtime) {
-      const cacheKey = generateOverviewKey(sourcePath, width, height, tintColor, isDarkMode, mtime);
-      const cachedPath = wpOverviewDir + cacheKey + ".png";
-
-      processRequest(cacheKey, cachedPath, sourcePath, callback, function () {
-        startOverviewProcessing(sourcePath, cachedPath, width, height, tintColor, isDarkMode, cacheKey);
-      });
-    });
-  }
-
-  // -------------------------------------------------
   // Cache Key Generation
   // -------------------------------------------------
   function generateThumbnailKey(sourcePath, mtime) {
@@ -243,11 +271,6 @@ Singleton {
       return Checksum.sha256(appName + "|" + summary);
     }
     return Checksum.sha256(imageUri);
-  }
-
-  function generateOverviewKey(sourcePath, width, height, tintColor, isDarkMode, mtime) {
-    const keyString = sourcePath + "@" + width + "x" + height + "@" + tintColor + "@" + (isDarkMode ? "dark" : "light") + "@" + (mtime || "unknown");
-    return Checksum.sha256(keyString);
   }
 
   // -------------------------------------------------
@@ -324,21 +347,8 @@ Singleton {
     const srcEsc = sourcePath.replace(/'/g, "'\\''");
     const dstEsc = outputPath.replace(/'/g, "'\\''");
 
-    // Use Lanczos filter for high-quality downscaling, subtle unsharp mask, and PNG for lossless output
-    const command = `magick '${srcEsc}' -auto-orient -filter Lanczos -resize '${width}x${height}^' -unsharp 0x0.5 '${dstEsc}'`;
-
-    runProcess(command, cacheKey, outputPath, sourcePath);
-  }
-
-  // -------------------------------------------------
-  // ImageMagick Processing: Blurred Overview
-  // -------------------------------------------------
-  function startOverviewProcessing(sourcePath, outputPath, width, height, tintColor, isDarkMode, cacheKey) {
-    const srcEsc = sourcePath.replace(/'/g, "'\\''");
-    const dstEsc = outputPath.replace(/'/g, "'\\''");
-
-    // Resize, blur, then tint overlay
-    const command = `magick '${srcEsc}' -auto-orient -resize '${width}x${height}^' -gravity center -extent ${width}x${height} -gaussian-blur 0x5 \\( +clone -fill '${tintColor}' -colorize 100 -alpha set -channel A -evaluate set 50% +channel \\) -composite '${dstEsc}'`;
+    // Use Lanczos filter for high-quality downscaling and PNG for lossless output
+    const command = `magick '${srcEsc}' -auto-orient -filter Lanczos -resize '${width}x${height}^' '${dstEsc}'`;
 
     runProcess(command, cacheKey, outputPath, sourcePath);
   }

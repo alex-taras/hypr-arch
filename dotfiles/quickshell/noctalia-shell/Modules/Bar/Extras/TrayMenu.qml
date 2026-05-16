@@ -26,7 +26,7 @@ PopupWindow {
   readonly property bool isPinned: {
     if (!trayItem || widgetSection === "" || widgetIndex < 0)
       return false;
-    var widgets = Settings.data.bar.widgets[widgetSection];
+    var widgets = Settings.getBarWidgetsForScreen(root.screen?.name)[widgetSection];
     if (!widgets || widgetIndex >= widgets.length)
       return false;
     var widgetSettings = widgets[widgetIndex];
@@ -46,7 +46,7 @@ PopupWindow {
   implicitWidth: menuWidth
 
   // Use the content height of the Flickable for implicit height
-  implicitHeight: Math.min(screen?.height * 0.9, flickable.contentHeight + (Style.marginS * 2))
+  implicitHeight: Math.min(screen?.height * 0.9, flickable.contentHeight + Style.margin2S)
 
   // When implicitHeight changes (menu content loads), force anchor recalculation
   onImplicitHeightChanged: {
@@ -86,10 +86,10 @@ PopupWindow {
       if (menuRight > screenRight && menuLeft < screenRight) {
         // Clipping on right edge - shift left
         const overflow = menuRight - screenRight;
-        return baseX - overflow - Style.marginM;
+        return baseX - overflow - Style.marginS;
       } else if (menuLeft < 0 && menuRight > 0) {
         // Clipping on left edge - shift right
-        return baseX - menuLeft + Style.marginM;
+        return baseX - menuLeft + Style.marginS;
       }
 
       return baseX;
@@ -110,7 +110,11 @@ PopupWindow {
 
       if (shouldApplyBottomBarLogic) {
         // For bottom bar from the bar itself, position menu above the anchor with margin
-        baseY = -(implicitHeight + Style.marginL + 2);
+        baseY = -(implicitHeight + Style.marginS);
+      } else if (barPosition === "top" && !isSubMenu && anchorY >= 0) {
+        // For top bar: position menu below bar with margin
+        const barHeight = Style.getBarHeightForScreen(root.screen?.name);
+        baseY = barHeight + Style.marginS;
       }
 
       // Use a robust way to get screen coordinates
@@ -128,25 +132,25 @@ PopupWindow {
       // Calculate the screen Y of the menu top
       // Use a small guess for height if implicitHeight is 0 to avoid covering the bar on the first frame
       const effectiveHeight = implicitHeight > 0 ? implicitHeight : 200;
-      const effectiveBaseY = shouldApplyBottomBarLogic ? -(effectiveHeight + Style.marginL + 2) : baseY;
+      const effectiveBaseY = shouldApplyBottomBarLogic ? -(effectiveHeight + Style.marginS) : baseY;
 
       const menuScreenY = windowYOnScreen + posInWindow.y + effectiveBaseY;
       const menuBottom = menuScreenY + (implicitHeight > 0 ? implicitHeight : effectiveHeight);
       const screenHeight = screen ? screen.height : 1080;
 
       // Adjust the final baseY (the actual value returned to anchor.rect.y)
-      let finalBaseY = shouldApplyBottomBarLogic ? -(implicitHeight + Style.marginL + 2) : baseY;
+      let finalBaseY = shouldApplyBottomBarLogic ? -(implicitHeight + Style.marginS) : baseY;
 
       // Adjust if menu would clip off the bottom
       if (menuBottom > screenHeight) {
         const overflow = menuBottom - screenHeight;
-        finalBaseY -= (overflow + Style.marginM);
+        finalBaseY -= (overflow + Style.marginS);
       }
 
       // Adjust if menu would clip off the top
       // menuScreenY < 0 means it's above the screen edge
       if (menuScreenY < 0) {
-        finalBaseY -= (menuScreenY - Style.marginM);
+        finalBaseY -= (menuScreenY - Style.marginS);
       }
 
       return finalBaseY;
@@ -263,7 +267,7 @@ PopupWindow {
             } else {
               // Calculate based on text content
               const textHeight = text.contentHeight || (Style.fontSizeS * 1.2);
-              return Math.max(28, textHeight + (Style.marginS * 2));
+              return Math.max(28, textHeight + Style.margin2S);
             }
           }
 
@@ -272,7 +276,7 @@ PopupWindow {
 
           NDivider {
             anchors.centerIn: parent
-            width: parent.width - (Style.marginXL)
+            width: parent.width - Style.margin2M
             visible: modelData?.isSeparator ?? false
           }
 
@@ -288,6 +292,85 @@ PopupWindow {
               anchors.leftMargin: Style.marginM
               anchors.rightMargin: Style.marginM
               spacing: Style.marginS
+
+              // Indicator Container
+              Item {
+                visible: (modelData?.buttonType ?? QsMenuButtonType.None) !== QsMenuButtonType.None
+
+                implicitWidth: Math.round(Style.baseWidgetSize * 0.5)
+                implicitHeight: Math.round(Style.baseWidgetSize * 0.5)
+                Layout.alignment: Qt.AlignVCenter
+
+                // Helper properties
+                readonly property int type: modelData?.buttonType ?? QsMenuButtonType.None
+                readonly property bool isRadio: type === QsMenuButtonType.RadioButton
+                readonly property bool isChecked: modelData?.checkState === Qt.Checked || (modelData?.checked ?? false)
+
+                // Color Logic
+                readonly property color activeColor: mouseArea.containsMouse ? Color.mOnHover : Color.mPrimary
+                readonly property color checkMarkColor: mouseArea.containsMouse ? Color.mHover : Color.mOnPrimary
+                readonly property color borderColor: isChecked ? activeColor : (mouseArea.containsMouse ? Color.mOnHover : Color.mOnSurface)
+
+                // Checkbox Visuals
+                Rectangle {
+                  visible: !parent.isRadio
+                  anchors.centerIn: parent
+                  width: Math.round(Style.baseWidgetSize * 0.5)
+                  height: Math.round(Style.baseWidgetSize * 0.5)
+                  radius: Style.iRadiusXS
+                  color: "transparent" // Transparent to match RadioButton style
+                  border.color: parent.borderColor
+                  border.width: Style.borderM
+
+                  Behavior on border.color {
+                    ColorAnimation {
+                      duration: Style.animationFast
+                    }
+                  }
+
+                  NIcon {
+                    visible: parent.parent.isChecked
+                    anchors.centerIn: parent
+                    anchors.horizontalCenterOffset: -1
+                    icon: "check"
+                    color: parent.parent.activeColor
+                    pointSize: Math.max(Style.fontSizeXXS, parent.width * 0.6)
+                  }
+                }
+
+                // RadioButton Visuals
+                Rectangle {
+                  visible: parent.isRadio
+                  anchors.centerIn: parent
+                  width: Style.toOdd(Style.baseWidgetSize * 0.5)
+                  height: Style.toOdd(Style.baseWidgetSize * 0.5)
+                  radius: width / 2
+                  color: "transparent"
+                  border.color: parent.borderColor
+                  border.width: Style.borderM // Slightly thicker for radio look
+
+                  Behavior on border.color {
+                    ColorAnimation {
+                      duration: Style.animationFast
+                    }
+                  }
+
+                  Rectangle {
+                    visible: parent.parent.isChecked
+                    anchors.centerIn: parent
+                    width: Style.toOdd(parent.width * 0.5)
+                    height: Style.toOdd(parent.height * 0.5)
+                    radius: width / 2
+                    color: parent.parent.activeColor
+
+                    Behavior on color {
+                      ColorAnimation {
+                        duration: Style.animationFast
+                      }
+                    }
+                  }
+                }
+              }
 
               NText {
                 id: text
@@ -408,7 +491,7 @@ PopupWindow {
         visible: {
           if (widgetSection === "" || widgetIndex < 0)
             return false;
-          var widgets = Settings.data.bar.widgets[widgetSection];
+          var widgets = Settings.getBarWidgetsForScreen(root.screen?.name)[widgetSection];
           if (!widgets || widgetIndex >= widgets.length)
             return false;
           var widgetSettings = widgets[widgetIndex];
@@ -474,7 +557,8 @@ PopupWindow {
       Logger.w("TrayMenu", "Cannot pin: tray item has no name");
       return;
     }
-    var widgets = Settings.data.bar.widgets[widgetSection];
+    var screenName = root.screen?.name || "";
+    var widgets = Settings.getBarWidgetsForScreen(screenName)[widgetSection];
     if (!widgets || widgetIndex >= widgets.length) {
       Logger.w("TrayMenu", "Cannot pin: invalid widget index");
       return;
@@ -490,7 +574,15 @@ PopupWindow {
     var newSettings = Object.assign({}, widgetSettings);
     newSettings.pinned = newPinned;
     widgets[widgetIndex] = newSettings;
-    Settings.data.bar.widgets[widgetSection] = widgets;
+
+    // Write to the correct location: screen override or global
+    if (Settings.hasScreenOverride(screenName, "widgets")) {
+      var overrideWidgets = Settings.getBarWidgetsForScreen(screenName);
+      overrideWidgets[widgetSection] = widgets;
+      Settings.setScreenOverride(screenName, "widgets", overrideWidgets);
+    } else {
+      Settings.data.bar.widgets[widgetSection] = widgets;
+    }
     Settings.saveImmediate();
 
     // Close drawer when pinning (drawer needs to resize)
@@ -511,7 +603,8 @@ PopupWindow {
       Logger.w("TrayMenu", "Cannot unpin: tray item has no name");
       return;
     }
-    var widgets = Settings.data.bar.widgets[widgetSection];
+    var screenName = root.screen?.name || "";
+    var widgets = Settings.getBarWidgetsForScreen(screenName)[widgetSection];
     if (!widgets || widgetIndex >= widgets.length) {
       Logger.w("TrayMenu", "Cannot unpin: invalid widget index");
       return;
@@ -531,7 +624,15 @@ PopupWindow {
     var newSettings = Object.assign({}, widgetSettings);
     newSettings.pinned = newPinned;
     widgets[widgetIndex] = newSettings;
-    Settings.data.bar.widgets[widgetSection] = widgets;
+
+    // Write to the correct location: screen override or global
+    if (Settings.hasScreenOverride(screenName, "widgets")) {
+      var overrideWidgets = Settings.getBarWidgetsForScreen(screenName);
+      overrideWidgets[widgetSection] = widgets;
+      Settings.setScreenOverride(screenName, "widgets", overrideWidgets);
+    } else {
+      Settings.data.bar.widgets[widgetSection] = widgets;
+    }
     Settings.saveImmediate();
   }
 }

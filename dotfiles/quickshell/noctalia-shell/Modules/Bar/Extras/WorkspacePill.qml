@@ -14,6 +14,7 @@ Item {
   required property real capsuleHeight
   required property real barHeight
   required property string labelMode
+  required property int fontWeight
   required property int characterCount
   required property real textRatio
   required property bool showLabelsOnlyWhenOccupied
@@ -28,23 +29,6 @@ Item {
 
   // Fixed dimension (cross-axis) for visual pill
   readonly property real fixedDimension: Style.toOdd(capsuleHeight * baseDimensionRatio)
-
-  // Helper to safely get colors with proper reactivity
-  // Accesses Color singleton directly to ensure fresh values
-  function getColorPair(colorKey) {
-    switch (colorKey) {
-    case "primary":
-      return [Color.mPrimary, Color.mOnPrimary];
-    case "secondary":
-      return [Color.mSecondary, Color.mOnSecondary];
-    case "tertiary":
-      return [Color.mTertiary, Color.mOnTertiary];
-    case "onSurface":
-      return [Color.mOnSurface, Color.mSurface];
-    default:
-      return [Color.mPrimary, Color.mOnPrimary];
-    }
-  }
 
   // Animated pill dimensions (for visual pill, not container)
   property real pillWidth: isVertical ? fixedDimension : getWorkspaceWidth(workspace, false)
@@ -102,17 +86,17 @@ Item {
       if (pillMouseArea.containsMouse)
         return Color.mHover;
       if (workspace.isFocused)
-        return getColorPair(focusedColor)[0];
+        return Color.resolveColorKey(focusedColor);
       if (workspace.isUrgent)
         return Color.mError;
       if (workspace.isOccupied)
-        return getColorPair(occupiedColor)[0];
-      return Qt.alpha(getColorPair(emptyColor)[0], 0.3);
+        return Color.resolveColorKey(occupiedColor);
+      return Qt.alpha(Color.resolveColorKey(emptyColor), 0.3);
     }
 
     Loader {
       active: (labelMode !== "none") && (!showLabelsOnlyWhenOccupied || workspace.isOccupied || workspace.isFocused)
-      anchors.centerIn: parent
+      anchors.fill: parent
       sourceComponent: Component {
         NText {
           text: {
@@ -136,18 +120,20 @@ Item {
           pointSize: (isVertical ? pillContainer.pillWidth : pillContainer.pillHeight) * textRatio
           applyUiScale: false
           font.capitalization: Font.AllUppercase
-          font.weight: Style.fontWeightBold
+          font.weight: fontWeight
+          horizontalAlignment: Text.AlignHCenter
+          verticalAlignment: Text.AlignVCenter
           wrapMode: Text.Wrap
           color: {
             if (pillMouseArea.containsMouse)
               return Color.mOnHover;
             if (workspace.isFocused)
-              return getColorPair(focusedColor)[1];
+              return Color.resolveOnColorKey(focusedColor);
             if (workspace.isUrgent)
               return Color.mOnError;
             if (workspace.isOccupied)
-              return getColorPair(occupiedColor)[1];
-            return getColorPair(emptyColor)[1];
+              return Color.resolveOnColorKey(occupiedColor);
+            return Color.resolveOnColorKey(emptyColor);
           }
 
           Behavior on color {

@@ -10,45 +10,58 @@ Item {
   // Provider metadata
   property string name: I18n.tr("tooltips.session-menu")
   property var launcher: null
-  property bool handleSearch: true
+  property bool handleSearch: Settings.data.appLauncher.enableSessionSearch
   property string supportedLayouts: "list"
+  property string iconMode: Settings.data.appLauncher.iconMode
 
   // Session actions with search keywords
   readonly property var sessionActions: [
     {
       "action": "lock",
       "labelKey": "common.lock",
-      "icon": "lock",
+      "icon": iconMode === "tabler" ? "lock" : "system-lock-screen",
       "keywords": ["lock", "screen", "secure"]
     },
     {
       "action": "suspend",
       "labelKey": "common.suspend",
-      "icon": "suspend",
+      "icon": iconMode === "tabler" ? "suspend" : "system-suspend",
       "keywords": ["suspend", "sleep", "standby"]
     },
     {
       "action": "hibernate",
       "labelKey": "common.hibernate",
-      "icon": "hibernate",
+      "icon": iconMode === "tabler" ? "hibernate" : "system-suspend-hibernate",
       "keywords": ["hibernate", "disk"]
     },
     {
       "action": "reboot",
       "labelKey": "common.reboot",
-      "icon": "reboot",
+      "icon": iconMode === "tabler" ? "reboot" : "system-reboot",
       "keywords": ["reboot", "restart", "reload"]
+    },
+    {
+      "action": "rebootToUefi",
+      "labelKey": "common.reboot-to-uefi",
+      "icon": iconMode === "tabler" ? "reboot" : "system-reboot",
+      "keywords": ["reboot", "uefi", "firmware", "bios"]
+    },
+    {
+      "action": "userspaceReboot",
+      "labelKey": "common.userspace-reboot",
+      "icon": iconMode === "tabler" ? "rotate" : "system-reboot",
+      "keywords": ["reboot", "restart", "soft", "userspace"]
     },
     {
       "action": "logout",
       "labelKey": "common.logout",
-      "icon": "logout",
+      "icon": iconMode === "tabler" ? "logout" : "system-log-out",
       "keywords": ["logout", "sign out", "exit", "leave"]
     },
     {
       "action": "shutdown",
       "labelKey": "common.shutdown",
-      "icon": "shutdown",
+      "icon": iconMode === "tabler" ? "shutdown" : "system-shutdown",
       "keywords": ["shutdown", "power off", "turn off", "poweroff"]
     }
   ]
@@ -140,46 +153,42 @@ Item {
       if (launcher)
         launcher.close();
 
+      // Execute via Qt.callLater, but reference only singletons
+      // (root may be destroyed after launcher.close() unloads the panel)
       Qt.callLater(() => {
-                     executeAction(action, command);
+                     switch (action) {
+                       case "lock":
+                       if (PanelService.lockScreen && !PanelService.lockScreen.active) {
+                         PanelService.lockScreen.active = true;
+                       }
+                       break;
+                       case "suspend":
+                       if (Settings.data.general.lockOnSuspend) {
+                         CompositorService.lockAndSuspend();
+                       } else {
+                         CompositorService.suspend();
+                       }
+                       break;
+                       case "hibernate":
+                       CompositorService.hibernate();
+                       break;
+                       case "reboot":
+                       CompositorService.reboot();
+                       break;
+                       case "rebootToUefi":
+                       CompositorService.rebootToUefi();
+                       break;
+                       case "userspaceReboot":
+                       CompositorService.userspaceReboot();
+                       break;
+                       case "logout":
+                       CompositorService.logout();
+                       break;
+                       case "shutdown":
+                       CompositorService.shutdown();
+                       break;
+                     }
                    });
     };
-  }
-
-  function executeAction(action, command) {
-    // If custom command is defined, execute it
-    if (command && command.trim() !== "") {
-      Logger.i("SessionProvider", "Executing custom command for action:", action, "Command:", command);
-      Quickshell.execDetached(["sh", "-lc", command]);
-      return;
-    }
-
-    // Otherwise, use default behavior
-    switch (action) {
-    case "lock":
-      if (PanelService.lockScreen && !PanelService.lockScreen.active) {
-        PanelService.lockScreen.active = true;
-      }
-      break;
-    case "suspend":
-      if (Settings.data.general.lockOnSuspend) {
-        CompositorService.lockAndSuspend();
-      } else {
-        CompositorService.suspend();
-      }
-      break;
-    case "hibernate":
-      CompositorService.hibernate();
-      break;
-    case "reboot":
-      CompositorService.reboot();
-      break;
-    case "logout":
-      CompositorService.logout();
-      break;
-    case "shutdown":
-      CompositorService.shutdown();
-      break;
-    }
   }
 }

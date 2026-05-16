@@ -5,7 +5,8 @@ gi.require_version('ECal', '2.0')
 gi.require_version('ICalGLib', "3.0")
 
 import json, sys
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
+from zoneinfo import ZoneInfo
 from gi.repository import ECal, EDataServer, ICalGLib
 
 start_time = int(sys.argv[1])
@@ -19,28 +20,44 @@ def safe_get_time(ical_time):
     if not ical_time:
         return None, False
     try:
+        year, month, day = ical_time.get_year(), ical_time.get_month(), ical_time.get_day()
         is_all_day = hasattr(ical_time, "is_date") and ical_time.is_date()
-        year = ical_time.get_year()
-        month = ical_time.get_month()
-        day = ical_time.get_day()
         if is_all_day:
+            # All-day events (birthdays, holidays) should not need
+            # to be timezone converted
             return int(datetime(year, month, day).timestamp()), True
-        hour = ical_time.get_hour()
-        minute = ical_time.get_minute()
-        second = ical_time.get_second()
-        dt = datetime(year, month, day, hour, minute, second)
+
+        hour, minute, second = ical_time.get_hour(), ical_time.get_minute(), ical_time.get_second()
+
+        # Determine timezone for proper conversion
+        tz_obj = ical_time.get_timezone() if hasattr(ical_time, 'get_timezone') else None
+        tzid = tz_obj.get_tzid() if tz_obj else None
+        tz = None
+        if ical_time.is_utc() if hasattr(ical_time, 'is_utc') else False:
+            tz = timezone.utc  # Explicit UTC time
+        elif tzid:
+            # Evolution uses non-standard format: /freeassociation.sourceforge.net/America/Los_Angeles
+            # Strip prefix to get IANA name: America/Los_Angeles
+            iana = tzid.replace('/freeassociation.sourceforge.net/', '') if tzid.startswith('/') else tzid
+            try: tz = ZoneInfo(iana)
+            except: pass
+
+        # Create timezone-aware datetime
+        dt = datetime(year, month, day, hour, minute, second, tzinfo=tz)
         return int(dt.timestamp()), False
     except:
         return None, False
 
-def add_event(summary, calendar_name, start_ts, end_ts, location="", description="", all_day=False):
+def add_event(summary, calendar_name, start_ts, end_ts, location="", description="", all_day=False, calendar_uid="", uid=""):
     all_events.append({
         'calendar': calendar_name,
         'summary': summary,
         'start': start_ts,
         'end': end_ts,
         'location': location,
-        'description': description
+        'description': description,
+        'calendar_uid': calendar_uid,
+        'uid': uid
     })
 
 registry = EDataServer.SourceRegistry.new_sync(None)
@@ -54,7 +71,7 @@ for source in sources:
     print(f"\nProcessing calendar: {calendar_name}", file=sys.stderr)
 
     try:
-        client = ECal.Client.connect_sync(source, ECal.ClientSourceType.EVENTS, 30, None)
+        client = ECal.Client.connect_sync(source, ECal.ClientSourceType.EVENTS, 5, None)
 
         start_dt = datetime.fromtimestamp(start_time)
         end_dt = datetime.fromtimestamp(end_time)
@@ -86,15 +103,21 @@ for source in sources:
                 summary = getattr(obj, "get_summary", lambda: "(No title)")()
                 dtstart = getattr(obj, "get_dtstart", lambda: None)()
                 dtend = getattr(obj, "get_dtend", lambda: None)()
+                location = getattr(obj, "get_location", lambda: "")() or ""
+                description = getattr(obj, "get_description", lambda: "")() or ""
                 start_ts, all_day = safe_get_time(dtstart)
                 end_ts, _ = safe_get_time(dtend)
                 if start_ts:
                     if end_ts is None:
                         end_ts = start_ts + 3600
-                    add_event(summary, calendar_name, start_ts, end_ts)
+                    event_uid = getattr(obj, "get_uid", lambda: "")() or ""
+                    add_event(summary, calendar_name, start_ts, end_ts, location, description,
+                              calendar_uid=source.get_uid(), uid=event_uid)
                 continue
 
             summary = getattr(comp, "get_summary", lambda: "(No title)")()
+            location = getattr(comp, "get_location", lambda: "")() or ""
+            description = getattr(comp, "get_description", lambda: "")() or ""
             dtstart = getattr(comp, "get_dtstart", lambda: None)()
             dtend = getattr(comp, "get_dtend", lambda: None)()
             start_ts, all_day = safe_get_time(dtstart)
@@ -123,7 +146,8 @@ for source in sources:
 
             # --- normal event ---
             if not rrule_prop and not rdates:
-                add_event(summary, calendar_name, start_ts, end_ts)
+                add_event(summary, calendar_name, start_ts, end_ts, location, description,
+                          calendar_uid=source.get_uid(), uid=comp.get_uid() or "")
                 continue
 
             # --- recurrent events ---
@@ -206,7 +230,8 @@ for source in sources:
 
                 # --- add occurences to all_events ---
                 for occ_start, occ_end in occurrences:
-                    add_event(summary, calendar_name, occ_start, occ_end)
+                    add_event(summary, calendar_name, occ_start, occ_end, location, description,
+                              calendar_uid=source.get_uid(), uid=comp.get_uid() or "")
 
 
     except Exception as e:

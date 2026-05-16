@@ -7,6 +7,9 @@ import Quickshell.Wayland
 import qs.Commons
 import qs.Modules.Bar.Extras
 import qs.Modules.Notification
+import qs.Modules.Panels.Settings
+import qs.Services.Compositor
+import qs.Services.Media
 import qs.Services.UI
 import qs.Widgets
 
@@ -64,7 +67,7 @@ Item {
   // Bar positioning properties (per-screen)
   readonly property string barPosition: Settings.getBarPositionForScreen(screen?.name)
   readonly property bool barIsVertical: barPosition === "left" || barPosition === "right"
-  readonly property bool barFloating: Settings.data.bar.floating || false
+  readonly property bool barFloating: Settings.data.bar.barType === "floating"
 
   // Bar density (per-screen)
   readonly property string barDensity: Settings.getBarDensityForScreen(screen?.name)
@@ -74,8 +77,99 @@ Item {
   readonly property real capsuleHeight: Style.getCapsuleHeightForDensity(barDensity, barHeight)
   readonly property real barFontSize: Style.getBarFontSizeForDensity(barHeight, capsuleHeight, barIsVertical)
 
-  // Bar widgets (per-screen)
+  // Bar widgets (per-screen) - initial configuration
+  // Note: Updates are handled via Connections to BarService.widgetsRevisionChanged
   readonly property var barWidgets: Settings.getBarWidgetsForScreen(screen?.name)
+
+  // Stable ListModels for each section - prevents Repeater recreation on settings changes
+  property ListModel leftWidgetsModel: ListModel {}
+  property ListModel centerWidgetsModel: ListModel {}
+  property ListModel rightWidgetsModel: ListModel {}
+
+  // Guard: set when Bar is destroyed; prevents Qt.callLater callbacks from running
+  // during/after teardown (avoids SIGSEGV in QV4::Object::insertMember when rapid
+  // workspace switch causes load/unload overlap with async widget incubation)
+  property bool _destroyed: false
+  Component.onDestruction: root._destroyed = true
+
+  // Sync a ListModel with widget data, preserving delegates when only settings change
+  function syncWidgetModel(model, newWidgets) {
+    var validWidgets = filterValidWidgets(newWidgets);
+
+    // Build list of current IDs in model
+    var currentIds = [];
+    for (var i = 0; i < model.count; i++) {
+      currentIds.push(model.get(i).id);
+    }
+
+    // Build list of new IDs
+    var newIds = validWidgets.map(w => w.id);
+
+    // Check if structure changed (different IDs or order)
+    var structureChanged = currentIds.length !== newIds.length;
+    if (!structureChanged) {
+      for (var i = 0; i < currentIds.length; i++) {
+        if (currentIds[i] !== newIds[i]) {
+          structureChanged = true;
+          break;
+        }
+      }
+    }
+
+    Logger.d("Bar", "syncWidgetModel:", currentIds.join("|"), "→", newIds.join("|"), "changed:", structureChanged);
+
+    if (structureChanged) {
+      // Rebuild model - IDs changed
+      model.clear();
+      for (var i = 0; i < validWidgets.length; i++) {
+        model.append(validWidgets[i]);
+      }
+    }
+    // If structure didn't change, delegates are preserved and will read fresh settings
+  }
+
+  // Sync models when widget revision changes
+  // Note: We use Connections instead of onBarWidgetsChanged because getBarWidgetsForScreen
+  // returns the same object reference (Settings.data.bar.widgets) even when content changes,
+  // so QML won't detect the change via property binding.
+  Connections {
+    target: BarService
+    function onWidgetsRevisionChanged() {
+      Logger.d("Bar", "onWidgetsRevisionChanged, revision:", BarService.widgetsRevision, "screen:", root.screen?.name);
+      Qt.callLater(root._syncFromRevision);
+    }
+  }
+
+  function _syncFromRevision() {
+    if (root._destroyed)
+      return;
+    var widgets = Settings.getBarWidgetsForScreen(screen?.name);
+    if (widgets) {
+      syncWidgetModel(leftWidgetsModel, widgets.left);
+      syncWidgetModel(centerWidgetsModel, widgets.center);
+      syncWidgetModel(rightWidgetsModel, widgets.right);
+    }
+  }
+
+  // Initialize models — deferred to next event-loop tick via Qt.callLater to avoid
+  // re-entrant incubation: Component.onCompleted fires during QQmlObjectCreator::finalize,
+  // and ListModel.append synchronously creates Repeater delegates whose own finalization
+  // can corrupt the V4 heap (SIGSEGV in QV4::Object::insertMember).
+  Component.onCompleted: {
+    Logger.d("Bar", "Bar Component.onCompleted for screen:", screen?.name);
+    Qt.callLater(root._initModels);
+  }
+
+  function _initModels() {
+    if (root._destroyed)
+      return;
+    var widgets = Settings.getBarWidgetsForScreen(screen?.name);
+    if (widgets) {
+      syncWidgetModel(leftWidgetsModel, widgets.left);
+      syncWidgetModel(centerWidgetsModel, widgets.center);
+      syncWidgetModel(rightWidgetsModel, widgets.right);
+    }
+  }
 
   // Fill the parent (the Loader)
   anchors.fill: parent
@@ -109,6 +203,14 @@ Item {
       // Bar container - Content
       Item {
         id: bar
+
+        // Wheel scroll handling (empty bar area)
+        property int barWheelAccumulatedDelta: 0
+        property bool barWheelCooldown: false
+        readonly property string barWheelAction: {
+          return Settings.data.bar.mouseWheelAction || "none";
+        }
+        readonly property string barRightClickAction: Settings.data.bar.rightClickAction || "controlCenter"
 
         // Position and size the bar content based on orientation
         x: (root.barPosition === "right") ? (parent.width - root.barHeight) : 0
@@ -193,42 +295,209 @@ Item {
           return -1;
         }
 
+        function isPointOverWidget(xPos, yPos) {
+          var widgets = BarService.getAllWidgetInstances(null, screen.name);
+          for (var i = 0; i < widgets.length; i++) {
+            var widget = widgets[i];
+            if (!widget || !widget.visible || widget.widgetId === "Spacer") {
+              continue;
+            }
+            var localPos = mapToItem(widget, xPos, yPos);
+
+            if (root.barIsVertical) {
+              if (localPos.y >= -Style.marginS && localPos.y <= widget.height + Style.marginS) {
+                return true;
+              }
+            } else {
+              if (localPos.x >= -Style.marginS && localPos.x <= widget.width + Style.marginS) {
+                return true;
+              }
+            }
+          }
+          return false;
+        }
+
+        function switchWorkspaceByOffset(offset) {
+          if (!root.screen || CompositorService.workspaces.count === 0)
+            return;
+
+          var screenName = root.screen.name.toLowerCase();
+          var candidates = [];
+          for (var i = 0; i < CompositorService.workspaces.count; i++) {
+            var ws = CompositorService.workspaces.get(i);
+            var matchesScreen = CompositorService.globalWorkspaces || (ws.output && ws.output.toLowerCase() === screenName);
+            if (matchesScreen)
+              candidates.push(ws);
+          }
+
+          if (candidates.length <= 1)
+            return;
+
+          var current = -1;
+          for (var j = 0; j < candidates.length; j++) {
+            if (candidates[j].isFocused) {
+              current = j;
+              break;
+            }
+          }
+          if (current < 0)
+            current = 0;
+
+          var next = current + offset;
+          if (Settings.data.bar.mouseWheelWrap) {
+            next = next % candidates.length;
+            if (next < 0)
+              next = candidates.length - 1;
+          } else {
+            if (next < 0 || next >= candidates.length)
+              return;
+          }
+
+          if (next === current)
+            return;
+          CompositorService.switchToWorkspace(candidates[next]);
+        }
+
+        function handleEmptyBarClick(action, followMouse, command, mouse) {
+          if (action === "none")
+            return;
+          if (action === "controlCenter") {
+            var controlCenterPanel = PanelService.getPanel("controlCenterPanel", screen);
+            controlCenterPanel?.toggle(null, followMouse ? mapToItem(null, mouse.x, mouse.y) : "ControlCenter");
+            mouse.accepted = true;
+          } else if (action === "settings") {
+            var settingsPanel = PanelService.getPanel("settingsPanel", screen);
+            settingsPanel?.toggle(null, followMouse ? mapToItem(null, mouse.x, mouse.y) : null);
+            mouse.accepted = true;
+          } else if (action === "launcherPanel") {
+            var launcherPanel = PanelService.getPanel("launcherPanel", screen);
+            launcherPanel?.toggle(null, followMouse ? mapToItem(null, mouse.x, mouse.y) : null);
+            mouse.accepted = true;
+          } else if (action === "command") {
+            runCustomCommand(command);
+            mouse.accepted = true;
+          }
+        }
+
+        function runCustomCommand(command) {
+          if (!command || command.trim() === "")
+            return;
+
+          const processString = "import QtQuick; import Quickshell.Io; Process { command: [\"sh\", \"-lc\", \"\"] }";
+
+          try {
+            const processObj = Qt.createQmlObject(processString, root, "BarCommandProcess_" + Date.now());
+            processObj.command = ["sh", "-lc", command];
+
+            processObj.exited.connect(function (exitCode) {
+              if (exitCode !== 0) {
+                ToastService.showError(I18n.tr("toast.custom-command-failed.title"), I18n.tr("toast.custom-command-failed.description", {
+                                                                                               command: command,
+                                                                                               code: exitCode
+                                                                                             }));
+              }
+              processObj.destroy();
+            });
+
+            processObj.running = true;
+          } catch (e) {
+            Logger.e("Bar", "Failed to start custom command:", e);
+            ToastService.showError(I18n.tr("toast.custom-command-failed.title"), I18n.tr("toast.custom-command-failed.description", {
+                                                                                           command: command,
+                                                                                           code: "start_error"
+                                                                                         }));
+          }
+        }
+
         MouseArea {
           anchors.fill: parent
-          acceptedButtons: Qt.RightButton
+          acceptedButtons: Qt.RightButton | Qt.MiddleButton
+          // Keep enabled even when actions are "none" so we still swallow right/middle on
+          // empty bar gaps. Otherwise Qt Quick's context-menu path can crash on Wayland
+          // (QQuickDeliveryAgentPrivate::contextMenuTargets / mapToScene).
+          enabled: true
           hoverEnabled: false
           preventStealing: true
-          onClicked: function (mouse) {
-            if (mouse.button === Qt.RightButton) {
-              // Check if click is over any widget
-              var widgets = BarService.getAllWidgetInstances(null, screen.name);
-              for (var i = 0; i < widgets.length; i++) {
-                var widget = widgets[i];
-                if (!widget || !widget.visible || widget.widgetId === "Spacer") {
-                  continue;
-                }
-                // Map click position to widget's coordinate space
-                var localPos = mapToItem(widget, mouse.x, mouse.y);
+          onClicked: mouse => {
+                       if (mouse.button === Qt.RightButton) {
+                         if (bar.isPointOverWidget(mouse.x, mouse.y))
+                         return;
+                         bar.handleEmptyBarClick(bar.barRightClickAction, Settings.data.bar.rightClickFollowMouse, Settings.data.bar.rightClickCommand, mouse);
+                         mouse.accepted = true;
+                         return;
+                       }
+                       if (mouse.button === Qt.MiddleButton) {
+                         if (bar.isPointOverWidget(mouse.x, mouse.y))
+                         return;
+                         bar.handleEmptyBarClick(Settings.data.bar.middleClickAction || "none", Settings.data.bar.middleClickFollowMouse, Settings.data.bar.middleClickCommand, mouse);
+                         mouse.accepted = true;
+                         return;
+                       }
+                     }
+        }
 
-                if (root.barIsVertical) {
-                  if (localPos.y >= -Style.marginS && localPos.y <= widget.height + Style.marginS) {
-                    return;
-                  }
-                } else {
-                  if (localPos.x >= -Style.marginS && localPos.x <= widget.width + Style.marginS) {
-                    return;
-                  }
-                }
+        // Debounce timer for wheel interactions
+        Timer {
+          id: barWheelDebounce
+          interval: 150
+          repeat: false
+          onTriggered: {
+            bar.barWheelCooldown = false;
+            bar.barWheelAccumulatedDelta = 0;
+          }
+        }
+
+        // Scroll on empty bar area action
+        WheelHandler {
+          id: barWheelHandler
+          target: bar
+          acceptedDevices: PointerDevice.Mouse | PointerDevice.TouchPad
+          enabled: bar.barWheelAction !== "none"
+
+          onWheel: function (event) {
+            if (bar.isPointOverWidget(event.x, event.y))
+              return;
+
+            var dy = event.angleDelta.y;
+            var dx = event.angleDelta.x;
+            var useDy = Math.abs(dy) >= Math.abs(dx);
+            var delta = useDy ? dy : dx;
+            var step = 120;
+
+            if (bar.barWheelAction === "volume") {
+              if (Settings.data.bar.reverseScroll)
+                delta *= -1;
+
+              bar.barWheelAccumulatedDelta += delta;
+              if (bar.barWheelAccumulatedDelta >= step) {
+                AudioService.increaseVolume();
+                bar.barWheelAccumulatedDelta = 0;
+                event.accepted = true;
+              } else if (bar.barWheelAccumulatedDelta <= -step) {
+                AudioService.decreaseVolume();
+                bar.barWheelAccumulatedDelta = 0;
+                event.accepted = true;
               }
-              // Click is on empty bar background - open control center
-              var controlCenterPanel = PanelService.getPanel("controlCenterPanel", screen);
-              if (Settings.data.controlCenter.position === "close_to_bar_button") {
-                // Will attempt to open the panel next to the bar button if any.
-                controlCenterPanel?.toggle(null, "ControlCenter");
-              } else {
-                controlCenterPanel?.toggle();
+              return;
+            }
+
+            if (bar.barWheelCooldown)
+              return;
+
+            bar.barWheelAccumulatedDelta += delta;
+            if (Math.abs(bar.barWheelAccumulatedDelta) >= step) {
+              var direction = bar.barWheelAccumulatedDelta > 0 ? -1 : 1;
+              if (Settings.data.bar.reverseScroll)
+                direction *= -1;
+              if (bar.barWheelAction === "workspace") {
+                bar.switchWorkspaceByOffset(direction);
+              } else if (bar.barWheelAction === "content") {
+                CompositorService.scrollWorkspaceContent(direction);
               }
-              mouse.accepted = true;
+              bar.barWheelCooldown = true;
+              barWheelDebounce.restart();
+              bar.barWheelAccumulatedDelta = 0;
+              event.accepted = true;
             }
           }
         }
@@ -254,7 +523,14 @@ Item {
         height: Style.marginS
         x: 0
         y: 0
-        onClicked: root.triggerFirstWidgetInSection("left")
+        acceptedButtons: Qt.LeftButton | Qt.RightButton | Qt.MiddleButton
+        onClicked: function (mouse) {
+          if (mouse.button !== Qt.LeftButton) {
+            mouse.accepted = true;
+            return;
+          }
+          root.triggerFirstWidgetInSection("left");
+        }
       }
 
       // Bottom edge hot corner - triggers last widget in right (bottom) section
@@ -263,29 +539,39 @@ Item {
         height: Style.marginS
         x: 0
         anchors.bottom: parent.bottom
-        onClicked: root.triggerLastWidgetInSection("right")
+        acceptedButtons: Qt.LeftButton | Qt.RightButton | Qt.MiddleButton
+        onClicked: function (mouse) {
+          if (mouse.button !== Qt.LeftButton) {
+            mouse.accepted = true;
+            return;
+          }
+          root.triggerLastWidgetInSection("right");
+        }
       }
+
+      // Calculate margin to center widgets vertically within the bar height
+      readonly property real verticalBarMargin: Math.round((root.barHeight - root.capsuleHeight) / 2)
 
       // Top section (left widgets)
       ColumnLayout {
         x: Style.pixelAlignCenter(parent.width, width)
         anchors.top: parent.top
-        anchors.topMargin: Style.marginS
-        spacing: Style.marginS
+        anchors.topMargin: verticalBarMargin + Settings.data.bar.contentPadding
+        spacing: Settings.data.bar.widgetSpacing
 
         Repeater {
-          model: root.filterValidWidgets(root.barWidgets.left)
+          model: root.leftWidgetsModel
           delegate: BarWidgetLoader {
-            required property var modelData
+            required property var model
             required property int index
 
-            widgetId: modelData.id || ""
+            widgetId: model.id || ""
             widgetScreen: root.screen
             widgetProps: ({
-                            "widgetId": modelData.id,
+                            "widgetId": model.id,
                             "section": "left",
                             "sectionWidgetIndex": index,
-                            "sectionWidgetsCount": root.barWidgets.left.length
+                            "sectionWidgetsCount": root.leftWidgetsModel.count
                           })
             Layout.alignment: Qt.AlignHCenter
           }
@@ -296,21 +582,21 @@ Item {
       ColumnLayout {
         x: Style.pixelAlignCenter(parent.width, width)
         anchors.verticalCenter: parent.verticalCenter
-        spacing: Style.marginS
+        spacing: Settings.data.bar.widgetSpacing
 
         Repeater {
-          model: root.filterValidWidgets(root.barWidgets.center)
+          model: root.centerWidgetsModel
           delegate: BarWidgetLoader {
-            required property var modelData
+            required property var model
             required property int index
 
-            widgetId: modelData.id || ""
+            widgetId: model.id || ""
             widgetScreen: root.screen
             widgetProps: ({
-                            "widgetId": modelData.id,
+                            "widgetId": model.id,
                             "section": "center",
                             "sectionWidgetIndex": index,
-                            "sectionWidgetsCount": root.barWidgets.center.length
+                            "sectionWidgetsCount": root.centerWidgetsModel.count
                           })
             Layout.alignment: Qt.AlignHCenter
           }
@@ -321,22 +607,22 @@ Item {
       ColumnLayout {
         x: Style.pixelAlignCenter(parent.width, width)
         anchors.bottom: parent.bottom
-        anchors.bottomMargin: Style.marginS
-        spacing: Style.marginS
+        anchors.bottomMargin: verticalBarMargin + Settings.data.bar.contentPadding
+        spacing: Settings.data.bar.widgetSpacing
 
         Repeater {
-          model: root.filterValidWidgets(root.barWidgets.right)
+          model: root.rightWidgetsModel
           delegate: BarWidgetLoader {
-            required property var modelData
+            required property var model
             required property int index
 
-            widgetId: modelData.id || ""
+            widgetId: model.id || ""
             widgetScreen: root.screen
             widgetProps: ({
-                            "widgetId": modelData.id,
+                            "widgetId": model.id,
                             "section": "right",
                             "sectionWidgetIndex": index,
-                            "sectionWidgetsCount": root.barWidgets.right.length
+                            "sectionWidgetsCount": root.rightWidgetsModel.count
                           })
             Layout.alignment: Qt.AlignHCenter
           }
@@ -358,7 +644,14 @@ Item {
         height: parent.height
         x: 0
         y: 0
-        onClicked: root.triggerFirstWidgetInSection("left")
+        acceptedButtons: Qt.LeftButton | Qt.RightButton | Qt.MiddleButton
+        onClicked: function (mouse) {
+          if (mouse.button !== Qt.LeftButton) {
+            mouse.accepted = true;
+            return;
+          }
+          root.triggerFirstWidgetInSection("left");
+        }
       }
 
       // Right edge hot corner - triggers last widget in right section
@@ -367,31 +660,41 @@ Item {
         height: parent.height
         anchors.right: parent.right
         y: 0
-        onClicked: root.triggerLastWidgetInSection("right")
+        acceptedButtons: Qt.LeftButton | Qt.RightButton | Qt.MiddleButton
+        onClicked: function (mouse) {
+          if (mouse.button !== Qt.LeftButton) {
+            mouse.accepted = true;
+            return;
+          }
+          root.triggerLastWidgetInSection("right");
+        }
       }
+
+      // Calculate margin to center widgets horizontally within the bar height
+      readonly property real horizontalBarMargin: Math.round((root.barHeight - root.capsuleHeight) / 2)
 
       // Left Section
       RowLayout {
         id: leftSection
         objectName: "leftSection"
         anchors.left: parent.left
-        anchors.leftMargin: Style.marginS
+        anchors.leftMargin: horizontalBarMargin + Settings.data.bar.contentPadding
         y: Style.pixelAlignCenter(parent.height, height)
-        spacing: Style.marginS
+        spacing: Settings.data.bar.widgetSpacing
 
         Repeater {
-          model: root.filterValidWidgets(root.barWidgets.left)
+          model: root.leftWidgetsModel
           delegate: BarWidgetLoader {
-            required property var modelData
+            required property var model
             required property int index
 
-            widgetId: modelData.id || ""
+            widgetId: model.id || ""
             widgetScreen: root.screen
             widgetProps: ({
-                            "widgetId": modelData.id,
+                            "widgetId": model.id,
                             "section": "left",
                             "sectionWidgetIndex": index,
-                            "sectionWidgetsCount": root.barWidgets.left.length
+                            "sectionWidgetsCount": root.leftWidgetsModel.count
                           })
             Layout.alignment: Qt.AlignVCenter
           }
@@ -404,21 +707,21 @@ Item {
         objectName: "centerSection"
         anchors.horizontalCenter: parent.horizontalCenter
         y: Style.pixelAlignCenter(parent.height, height)
-        spacing: Style.marginS
+        spacing: Settings.data.bar.widgetSpacing
 
         Repeater {
-          model: root.filterValidWidgets(root.barWidgets.center)
+          model: root.centerWidgetsModel
           delegate: BarWidgetLoader {
-            required property var modelData
+            required property var model
             required property int index
 
-            widgetId: modelData.id || ""
+            widgetId: model.id || ""
             widgetScreen: root.screen
             widgetProps: ({
-                            "widgetId": modelData.id,
+                            "widgetId": model.id,
                             "section": "center",
                             "sectionWidgetIndex": index,
-                            "sectionWidgetsCount": root.barWidgets.center.length
+                            "sectionWidgetsCount": root.centerWidgetsModel.count
                           })
             Layout.alignment: Qt.AlignVCenter
           }
@@ -430,23 +733,23 @@ Item {
         id: rightSection
         objectName: "rightSection"
         anchors.right: parent.right
-        anchors.rightMargin: Style.marginS
+        anchors.rightMargin: horizontalBarMargin + Settings.data.bar.contentPadding
         y: Style.pixelAlignCenter(parent.height, height)
-        spacing: Style.marginS
+        spacing: Settings.data.bar.widgetSpacing
 
         Repeater {
-          model: root.filterValidWidgets(root.barWidgets.right)
+          model: root.rightWidgetsModel
           delegate: BarWidgetLoader {
-            required property var modelData
+            required property var model
             required property int index
 
-            widgetId: modelData.id || ""
+            widgetId: model.id || ""
             widgetScreen: root.screen
             widgetProps: ({
-                            "widgetId": modelData.id,
+                            "widgetId": model.id,
                             "section": "right",
                             "sectionWidgetIndex": index,
-                            "sectionWidgetsCount": root.barWidgets.right.length
+                            "sectionWidgetsCount": root.rightWidgetsModel.count
                           })
             Layout.alignment: Qt.AlignVCenter
           }

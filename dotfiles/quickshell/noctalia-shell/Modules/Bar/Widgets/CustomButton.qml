@@ -12,6 +12,27 @@ import qs.Widgets
 Item {
   id: root
 
+  NPopupContextMenu {
+    id: contextMenu
+
+    model: [
+      {
+        "label": I18n.tr("actions.widget-settings"),
+        "action": "widget-settings",
+        "icon": "settings"
+      },
+    ]
+
+    onTriggered: action => {
+                   contextMenu.close();
+                   PanelService.closeContextMenu(screen);
+
+                   if (action === "widget-settings") {
+                     BarService.openWidgetSettings(screen, section, sectionWidgetIndex, widgetId, widgetSettings);
+                   }
+                 }
+  }
+
   property ShellScreen screen
 
   // Widget properties passed from Bar.qml for per-instance settings
@@ -20,7 +41,7 @@ Item {
   property int sectionWidgetIndex: -1
   property int sectionWidgetsCount: 0
 
-  property var widgetMetadata: BarWidgetRegistry.widgetMetadata[widgetId]
+  property var widgetMetadata: BarWidgetRegistry.widgetMetadata[widgetId] ?? {}
   // Explicit screenName property ensures reactive binding when screen changes
   readonly property string screenName: screen ? screen.name : ""
   property var widgetSettings: {
@@ -37,6 +58,7 @@ Item {
   readonly property bool isVerticalBar: barPosition === "left" || barPosition === "right"
 
   readonly property string customIcon: widgetSettings.icon || widgetMetadata.icon
+  readonly property string iconPosition: widgetSettings.iconPosition || widgetMetadata.iconPosition
   readonly property string leftClickExec: widgetSettings.leftClickExec || widgetMetadata.leftClickExec
   readonly property bool leftClickUpdateText: widgetSettings.leftClickUpdateText ?? widgetMetadata.leftClickUpdateText
   readonly property string rightClickExec: widgetSettings.rightClickExec || widgetMetadata.rightClickExec
@@ -58,6 +80,10 @@ Item {
   readonly property bool parseJson: widgetSettings.parseJson !== undefined ? widgetSettings.parseJson : (widgetMetadata.parseJson || false)
   readonly property bool hasExec: (leftClickExec || rightClickExec || middleClickExec || (wheelMode === "unified" && wheelExec) || (wheelMode === "separate" && (wheelUpExec || wheelDownExec)))
   readonly property bool showIcon: (widgetSettings.showIcon !== undefined) ? widgetSettings.showIcon : true
+  readonly property bool showExecTooltip: widgetSettings.showExecTooltip !== undefined ? widgetSettings.showExecTooltip : (widgetMetadata.showExecTooltip !== undefined ? widgetMetadata.showExecTooltip : true)
+  readonly property bool showTextTooltip: widgetSettings.showTextTooltip !== undefined ? widgetSettings.showTextTooltip : (widgetMetadata.showTextTooltip !== undefined ? widgetMetadata.showTextTooltip : true)
+  readonly property string generalTooltipText: widgetSettings.generalTooltipText !== undefined ? widgetSettings.generalTooltipText : (widgetMetadata.generalTooltipText || "")
+  readonly property bool _hasCustomTooltip: generalTooltipText.trim() !== ""
   readonly property string hideMode: widgetSettings.hideMode || "alwaysExpanded"
   readonly property bool hasOutput: _dynamicText !== ""
   readonly property bool shouldForceOpen: textStream && (hideMode === "alwaysExpanded" || hideMode === "maxTransparent")
@@ -135,47 +161,63 @@ Item {
     return " ".repeat(currentMaxTextLength);
   }
 
-  readonly property bool enableColorization: widgetSettings.enableColorization || false
   readonly property string colorizeSystemIcon: {
     if (widgetSettings.colorizeSystemIcon !== undefined)
       return widgetSettings.colorizeSystemIcon;
     return widgetMetadata.colorizeSystemIcon !== undefined ? widgetMetadata.colorizeSystemIcon : "none";
   }
-
-  readonly property bool isColorizing: enableColorization && colorizeSystemIcon !== "none"
-
-  readonly property color iconColor: {
-    if (!isColorizing)
-      return Color.mOnSurface;
-    switch (colorizeSystemIcon) {
-    case "primary":
-      return Color.mPrimary;
-    case "secondary":
-      return Color.mSecondary;
-    case "tertiary":
-      return Color.mTertiary;
-    case "error":
-      return Color.mError;
-    default:
-      return Color.mOnSurface;
-    }
+  readonly property string colorizeSystemText: {
+    if (widgetSettings.colorizeSystemText !== undefined)
+      return widgetSettings.colorizeSystemText;
+    return widgetMetadata.colorizeSystemText !== undefined ? widgetMetadata.colorizeSystemText : "none";
   }
-  readonly property color iconHoverColor: {
-    if (!isColorizing)
-      return Color.mOnHover;
-    switch (colorizeSystemIcon) {
-    case "primary":
-      return Qt.darker(Color.mPrimary, 1.2);
-    case "secondary":
-      return Qt.darker(Color.mSecondary, 1.2);
-    case "tertiary":
-      return Qt.darker(Color.mTertiary, 1.2);
-    case "error":
-      return Qt.darker(Color.mError, 1.2);
-    default:
-      return Color.mOnHover;
-    }
+
+  // Colorization is active if either icon or text has a color set
+  readonly property bool isColorizing: colorizeSystemIcon !== "none" || colorizeSystemText !== "none"
+
+  // Get color value from color name (returns null for invalid names)
+  function _getColorValue(colorName, forHover) {
+    const baseColor = (function () {
+      switch (colorName) {
+      case "primary":
+        return Color.mPrimary;
+      case "secondary":
+        return Color.mSecondary;
+      case "tertiary":
+        return Color.mTertiary;
+      case "error":
+        return Color.mError;
+      default:
+        return null;
+      }
+    })();
+    return baseColor !== null ? (forHover ? Qt.darker(baseColor, 1.2) : baseColor) : null;
   }
+
+  // Resolve icon color with priority: dynamic > static > default
+  function _resolveIconColor(dynamicColorName, staticColorName, isHover) {
+    if (dynamicColorName && dynamicColorName !== "") {
+      if (dynamicColorName === "none") {
+        return isHover ? Color.mOnHover : Color.mOnSurface;
+      }
+      const color = _getColorValue(dynamicColorName, isHover);
+      if (color !== null)
+        return color;
+    }
+
+    if (staticColorName && staticColorName !== "" && isColorizing) {
+      const color = _getColorValue(staticColorName, isHover);
+      if (color !== null)
+        return color;
+    }
+
+    return isHover ? Color.mOnHover : Color.mOnSurface;
+  }
+
+  readonly property color iconColor: _resolveIconColor(_dynamicIconColor || _dynamicColor, colorizeSystemIcon, false)
+  readonly property color iconHoverColor: _resolveIconColor(_dynamicIconColor || _dynamicColor, colorizeSystemIcon, true)
+  readonly property color textColor: _resolveIconColor(_dynamicTextColor || _dynamicColor, colorizeSystemText, false)
+  readonly property color textHoverColor: _resolveIconColor(_dynamicTextColor || _dynamicColor, colorizeSystemText, true)
 
   implicitWidth: pill.width
   implicitHeight: pill.height
@@ -187,50 +229,80 @@ Item {
     opacity: _pillOpacity
     screen: root.screen
     oppositeDirection: BarService.getPillDirection(root)
+    iconPosition: root.iconPosition
     icon: _pillIcon
     text: _pillText
     rotateText: isVerticalBar && currentMaxTextLength > 0
     autoHide: false
     forceOpen: _pillForceOpen
-    customTextIconColor: isColorizing ? iconColor : "transparent"
+    forceClose: !_pillForceOpen
+    customIconColor: iconColor
+    customTextColor: textColor
 
-    tooltipText: {
-      var tooltipLines = [];
+    // Helper function to build tooltip content
+    function _buildTooltipContent() {
+      var lines = [];
 
-      if (hasExec) {
+      // Add custom tooltip if set
+      if (_hasCustomTooltip) {
+        lines.push(generalTooltipText);
+      }
+
+      // Add command details if enabled and available
+      if (showExecTooltip && hasExec) {
         if (leftClickExec !== "") {
-          tooltipLines.push(`Left click: ${leftClickExec}.`);
+          lines.push(I18n.tr("bar.custom-button.left-click-label") + `: ${leftClickExec}`);
+        } else if (!leftClickUpdateText) {
+          lines.push(I18n.tr("bar.custom-button.left-click-label") + ": " + I18n.tr("actions.widget-settings"));
         }
+
         if (rightClickExec !== "") {
-          tooltipLines.push(`Right click: ${rightClickExec}.`);
+          lines.push(I18n.tr("bar.custom-button.right-click-label") + `: ${rightClickExec}`);
+        } else if (!rightClickUpdateText) {
+          lines.push(I18n.tr("bar.custom-button.right-click-label") + ": " + I18n.tr("actions.widget-settings"));
         }
+
         if (middleClickExec !== "") {
-          tooltipLines.push(`Middle click: ${middleClickExec}.`);
+          lines.push(I18n.tr("bar.custom-button.middle-click-label") + `: ${middleClickExec}`);
+        } else if (!middleClickUpdateText) {
+          lines.push(I18n.tr("bar.custom-button.middle-click-label") + ": " + I18n.tr("actions.widget-settings"));
         }
+
         if (wheelMode === "unified" && wheelExec !== "") {
-          tooltipLines.push(`Wheel: ${wheelExec}.`);
+          lines.push(I18n.tr("bar.custom-button.wheel-label") + `: ${wheelExec}`);
         } else if (wheelMode === "separate") {
           if (wheelUpExec !== "") {
-            tooltipLines.push(`Wheel up: ${wheelUpExec}.`);
+            lines.push(I18n.tr("bar.custom-button.wheel-up") + `: ${wheelUpExec}`);
           }
           if (wheelDownExec !== "") {
-            tooltipLines.push(`Wheel down: ${wheelDownExec}.`);
+            lines.push(I18n.tr("bar.custom-button.wheel-down") + `Wheel down: ${wheelDownExec}`);
           }
         }
       }
 
-      if (_dynamicTooltip !== "") {
-        if (tooltipLines.length > 0) {
-          tooltipLines.push("");
-        }
-        tooltipLines.push(_dynamicTooltip);
+      // Add dynamic text tooltip if enabled and available
+      if (showTextTooltip && _dynamicTooltip !== "") {
+        lines.push(_dynamicTooltip);
       }
 
-      if (tooltipLines.length === 0) {
-        return "Custom button, configure in settings.";
-      } else {
-        return tooltipLines.join("\n");
+      return lines;
+    }
+
+    tooltipText: {
+      var lines = _buildTooltipContent();
+
+      // If no custom tooltip and both switches are off, show default tooltip
+      if (!_hasCustomTooltip && !showExecTooltip && !showTextTooltip) {
+        return I18n.tr("bar.custom-button.default-tooltip");
       }
+
+      // If there's content, join with newlines
+      if (lines.length > 0) {
+        return lines.join("\n");
+      }
+
+      // Fallback (shouldn't reach here normally)
+      return I18n.tr("bar.custom-button.default-tooltip");
     }
 
     onClicked: root.clicked()
@@ -243,6 +315,9 @@ Item {
   property string _dynamicText: ""
   property string _dynamicIcon: ""
   property string _dynamicTooltip: ""
+  property string _dynamicColor: ""
+  property string _dynamicIconColor: ""
+  property string _dynamicTextColor: ""
 
   // Maximum length for text display before scrolling (different values for horizontal and vertical)
   readonly property var maxTextLength: {
@@ -358,27 +433,47 @@ Item {
   function parseDynamicContent(content) {
     var contentStr = String(content || "").trim();
 
-    if (parseJson) {
-      var lineToParse = contentStr;
-
-      if (!textStream && contentStr.includes('\n')) {
+    if (parseJson && contentStr) {
+      // Handle multi-line JSON by filtering empty lines and joining
+      var jsonStr = contentStr;
+      if (contentStr.includes('\n')) {
         const lines = contentStr.split('\n').filter(line => line.trim() !== '');
-        if (lines.length > 0) {
-          lineToParse = lines[lines.length - 1];
-        }
+        jsonStr = lines.join('');
       }
 
       try {
-        const parsed = JSON.parse(lineToParse);
+        const parsed = JSON.parse(jsonStr);
         const text = parsed.text || "";
         const icon = parsed.icon || "";
         let tooltip = parsed.tooltip || "";
+
+        // Support both "color" (legacy) and "iconColor"/"textColor" (new)
+        const legacyColor = parsed.color || "";
+        const iconColorKey = parsed.iconColor || "";
+        const textColorKey = parsed.textColor || "";
+
+        const validColors = ["primary", "secondary", "tertiary", "error", "none"];
+
+        // Helper to resolve color: legacy > specific > none
+        function resolveColor(legacy, specific) {
+          if (legacy && validColors.includes(legacy))
+            return legacy;
+          if (specific && validColors.includes(specific))
+            return specific;
+          return "";
+        }
+
+        const resolvedIconColor = resolveColor(legacyColor, iconColorKey);
+        const resolvedTextColor = resolveColor(legacyColor, textColorKey);
 
         if (checkCollapse(text)) {
           _scrollState.originalText = "";
           _dynamicText = "";
           _dynamicIcon = "";
           _dynamicTooltip = "";
+          _dynamicColor = "";
+          _dynamicIconColor = "";
+          _dynamicTextColor = "";
           _scrollState.needsScrolling = false;
           _scrollState.phase = 0;
           _scrollState.phaseCounter = 0;
@@ -388,23 +483,25 @@ Item {
         _scrollState.originalText = text;
         _scrollState.needsScrolling = text.length > currentMaxTextLength && currentMaxTextLength > 0;
         if (_scrollState.needsScrolling) {
-          // Start with the beginning of the text
           _dynamicText = text.substring(0, currentMaxTextLength);
-          _scrollState.phase = 0;  // Start at phase 0 (static beginning)
+          _scrollState.phase = 0;
           _scrollState.phaseCounter = 0;
           _scrollState.offset = 0;
-          scrollTimer.start();  // Start the scrolling timer
+          scrollTimer.start();
         } else {
           _dynamicText = text;
           scrollTimer.stop();
         }
         _dynamicIcon = icon;
+        _dynamicColor = legacyColor;  // Keep legacy color for fallback
+        _dynamicIconColor = resolvedIconColor;
+        _dynamicTextColor = resolvedTextColor;
 
         _dynamicTooltip = toHtml(tooltip);
         _scrollState.offset = 0;
         return;
       } catch (e) {
-        Logger.w("CustomButton", `Failed to parse JSON. Content: "${lineToParse}"`);
+        Logger.w("CustomButton", `Failed to parse JSON. Content: "${contentStr}"`);
       }
     }
 
@@ -413,6 +510,9 @@ Item {
       _dynamicText = "";
       _dynamicIcon = "";
       _dynamicTooltip = "";
+      _dynamicColor = "";
+      _dynamicIconColor = "";
+      _dynamicTextColor = "";
       _scrollState.needsScrolling = false;
       _scrollState.phase = 0;
       _scrollState.phaseCounter = 0;
@@ -422,17 +522,19 @@ Item {
     _scrollState.originalText = contentStr;
     _scrollState.needsScrolling = contentStr.length > currentMaxTextLength && currentMaxTextLength > 0;
     if (_scrollState.needsScrolling) {
-      // Start with the beginning of the text
       _dynamicText = contentStr.substring(0, currentMaxTextLength);
-      _scrollState.phase = 0;  // Start at phase 0 (static beginning)
+      _scrollState.phase = 0;
       _scrollState.phaseCounter = 0;
       _scrollState.offset = 0;
-      scrollTimer.start();  // Start the scrolling timer
+      scrollTimer.start();
     } else {
       _dynamicText = contentStr;
       scrollTimer.stop();
     }
     _dynamicIcon = "";
+    _dynamicColor = "";
+    _dynamicIconColor = "";
+    _dynamicTextColor = "";
     _dynamicTooltip = toHtml(contentStr);
     _scrollState.offset = 0;
   }
@@ -464,7 +566,6 @@ Item {
       Logger.i("CustomButton", `Executing command: ${leftClickExec}`);
     } else if (!leftClickUpdateText) {
       BarService.openWidgetSettings(screen, section, sectionWidgetIndex, widgetId, widgetSettings);
-      //SettingsPanelService.openToTab(SettingsPanel.Tab.Bar, 1, screen);
     }
     if (!textStream && leftClickUpdateText) {
       runTextCommand();
@@ -475,6 +576,8 @@ Item {
     if (rightClickExec) {
       Quickshell.execDetached(["sh", "-lc", rightClickExec]);
       Logger.i("CustomButton", `Executing command: ${rightClickExec}`);
+    } else {
+      PanelService.showContextMenu(contextMenu, pill, screen);
     }
     if (!textStream && rightClickUpdateText) {
       runTextCommand();
@@ -485,6 +588,8 @@ Item {
     if (middleClickExec) {
       Quickshell.execDetached(["sh", "-lc", middleClickExec]);
       Logger.i("CustomButton", `Executing command: ${middleClickExec}`);
+    } else if (!middleClickUpdateText) {
+      BarService.openWidgetSettings(screen, section, sectionWidgetIndex, widgetId, widgetSettings);
     }
     if (!textStream && middleClickUpdateText) {
       runTextCommand();
@@ -611,60 +716,16 @@ Item {
     }
   }
 
-  // Timer to handle registration attempts
-  Timer {
-    id: registrationTimer
-    interval: 1500
-    repeat: false
-    onTriggered: {
-      // Only register if ipcIdentifier is set
-      if (ipcIdentifier && ipcIdentifier.trim() !== "") {
-        // Try to access the service through the global application object
-        try {
-          if (typeof Qt !== 'undefined' && Qt.application && Qt.application.customButtonIPCService) {
-            var service = Qt.application.customButtonIPCService;
-            var success = service.registerButton(root);
-            if (success) {
-              Logger.i("CustomButton", `Successfully registered button with identifier: '${ipcIdentifier}'`);
-            } else {
-              Logger.w("CustomButton", `Failed to register button with identifier: '${ipcIdentifier}'`);
-            }
-          } else {
-            Logger.w("CustomButton", `Service not available for button with identifier '${ipcIdentifier}'`);
-          }
-        } catch (e) {
-          Logger.w("CustomButton", `Error during registration of button with identifier '${ipcIdentifier}': ${e.message}`);
-        }
-      } else {
-        Logger.d("CustomButton", `No IPC identifier set for button, skipping registration`);
-      }
-    }
+  // Register IPC button in onLoaded (called by BarWidgetLoader after properties are set).
+  // Component.onCompleted is too early — widgetSettings depends on section/index/screen
+  // which are set by BarWidgetLoader.onLoaded after the component is created.
+  function onLoaded() {
+    if (ipcIdentifier && ipcIdentifier.trim() !== "")
+      CustomButtonIPCService.registerButton(root);
   }
 
-  // Register this button with the IPC service when component is completed
-  Component.onCompleted: {
-    registrationTimer.start();
-  }
-
-  // Unregister this button when component is destroyed
   Component.onDestruction: {
-    if (ipcIdentifier && ipcIdentifier.trim() !== "") {
-      // Try to access the service through the global application object for unregistration
-      try {
-        if (typeof Qt !== 'undefined' && Qt.application && Qt.application.customButtonIPCService) {
-          var service = Qt.application.customButtonIPCService;
-          var success = service.unregisterButton(root);
-          if (success) {
-            Logger.i("CustomButton", `Successfully unregistered button with identifier: '${ipcIdentifier}'`);
-          } else {
-            Logger.w("CustomButton", `Failed to unregister button with identifier: '${ipcIdentifier}'`);
-          }
-        } else {
-          Logger.w("CustomButton", `Service not available for unregistration of button with identifier '${ipcIdentifier}'`);
-        }
-      } catch (e) {
-        Logger.w("CustomButton", `Error during unregistration of button with identifier '${ipcIdentifier}': ${e.message}`);
-      }
-    }
+    if (ipcIdentifier && ipcIdentifier.trim() !== "")
+      CustomButtonIPCService.unregisterButton(root);
   }
 }

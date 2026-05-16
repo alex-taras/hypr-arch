@@ -12,11 +12,9 @@ import qs.Commons
 PanelWindow {
   id: root
 
-  property bool exclusive: Settings.data.bar.exclusive !== undefined ? Settings.data.bar.exclusive : false
-
   readonly property string barPosition: Settings.getBarPositionForScreen(screen?.name)
   readonly property bool barIsVertical: barPosition === "left" || barPosition === "right"
-  readonly property bool barFloating: Settings.data.bar.floating || false
+  readonly property bool barFloating: Settings.data.bar.barType === "floating"
   readonly property real barMarginH: barFloating ? Settings.data.bar.marginHorizontal : 0
   readonly property real barMarginV: barFloating ? Settings.data.bar.marginVertical : 0
   readonly property real barHeight: Style.getBarHeightForScreen(screen?.name)
@@ -29,7 +27,7 @@ PanelWindow {
   // Wayland layer shell configuration
   WlrLayershell.layer: WlrLayer.Top
   WlrLayershell.namespace: "noctalia-bar-exclusion-" + (screen?.name || "unknown")
-  WlrLayershell.exclusionMode: exclusive ? ExclusionMode.Auto : ExclusionMode.Ignore
+  WlrLayershell.exclusionMode: ExclusionMode.Auto
 
   // Anchor based on bar position
   anchors {
@@ -67,7 +65,7 @@ PanelWindow {
 
   Component.onCompleted: {
     Logger.d("BarExclusionZone", "Created for screen:", screen?.name);
-    Logger.d("BarExclusionZone", "  Position:", barPosition, "Exclusive:", exclusive, "Floating:", barFloating);
+    Logger.d("BarExclusionZone", "  Position:", barPosition, "Floating:", barFloating);
     Logger.d("BarExclusionZone", "  Anchors - top:", anchors.top, "bottom:", anchors.bottom, "left:", anchors.left, "right:", anchors.right);
     Logger.d("BarExclusionZone", "  Size:", width, "x", height, "implicitWidth:", implicitWidth, "implicitHeight:", implicitHeight);
   }

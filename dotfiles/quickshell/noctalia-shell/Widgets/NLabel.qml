@@ -8,10 +8,13 @@ ColumnLayout {
 
   property string label: ""
   property string description: ""
+  property string icon: ""
   property color labelColor: Color.mOnSurface
   property color descriptionColor: Color.mOnSurfaceVariant
+  property color iconColor: Color.mOnSurface
   property bool showIndicator: false
   property string indicatorTooltip: ""
+  property real labelSize: Style.fontSizeL
 
   opacity: enabled ? 1.0 : 0.6
   spacing: Style.marginXXS
@@ -22,39 +25,45 @@ ColumnLayout {
   RowLayout {
     spacing: Style.marginXS
     Layout.fillWidth: true
-    visible: label !== ""
+    visible: root.label !== ""
+
+    NIcon {
+      visible: root.icon !== ""
+      icon: root.icon
+      pointSize: Style.fontSizeXXL
+      color: root.iconColor
+      Layout.rightMargin: Style.marginS
+    }
 
     NText {
-      text: label
-      pointSize: Style.fontSizeL
+      id: labelText
+      Layout.fillWidth: true
+      text: root.label
+      pointSize: root.labelSize
       font.weight: Style.fontWeightSemiBold
       color: labelColor
       wrapMode: Text.WordWrap
-    }
 
-    // Settings indicator
-    Loader {
-      active: showIndicator
-      sourceComponent: indicatorComponent
-    }
-  }
-
-  Component {
-    id: indicatorComponent
-    NSettingsIndicator {
-      show: true
-      tooltipText: root.indicatorTooltip || ""
-      Layout.alignment: Qt.AlignVCenter
+      // Settings indicator dot positioned right after the text content
+      Loader {
+        active: root.showIndicator
+        x: labelText.contentWidth + Style.marginXS
+        anchors.verticalCenter: parent.verticalCenter
+        sourceComponent: NSettingsIndicator {
+          show: true
+          tooltipText: root.indicatorTooltip || ""
+        }
+      }
     }
   }
 
   NText {
+    visible: root.description !== ""
     Layout.fillWidth: true
-    text: description
+    text: root.description
     pointSize: Style.fontSizeS
-    color: descriptionColor
+    color: root.descriptionColor
     wrapMode: Text.WordWrap
-    visible: description !== ""
     textFormat: Text.StyledText
   }
 }

@@ -38,8 +38,28 @@ fi
 
 log "Deploying dotfiles..."
 if [ -d ./dotfiles ]; then
-    cp -r ./dotfiles/* ~/.config/
-    log "Dotfiles deployed to ~/.config/"
+    STALE=0
+    SKIPPED=0
+    while IFS= read -r src; do
+        rel="${src#./dotfiles/}"
+        dst="$HOME/.config/$rel"
+        if [ -e "$dst" ]; then
+            src_ts=$(stat -c %Y "$src")
+            dst_ts=$(stat -c %Y "$dst")
+            if [ "$dst_ts" -gt "$src_ts" ]; then
+                log "  SKIPPED (live is newer): $rel"
+                SKIPPED=$((SKIPPED + 1))
+                STALE=1
+                continue
+            fi
+        fi
+        mkdir -p "$(dirname "$dst")"
+        cp "$src" "$dst"
+    done < <(find ./dotfiles -type f | sort)
+    if [ "$STALE" -eq 1 ]; then
+        log "WARNING: Some dotfiles in this repo are OUT OF DATE — run backup before redeploying"
+    fi
+    log "Dotfiles deployed to ~/.config/ ($SKIPPED file(s) skipped — live was newer)"
 else
     log "No dotfiles directory found, skipping"
 fi
@@ -186,6 +206,19 @@ sudo ufw default allow FORWARD
 sudo ufw --force enable
 sudo systemctl enable --now ufw
 log "Firewall configured and enabled"
+
+log "Configuring snapper timeline for /home..."
+sudo snapper -c home set-config "TIMELINE_CREATE=yes" "TIMELINE_LIMIT_HOURLY=0" "TIMELINE_LIMIT_DAILY=7" "TIMELINE_LIMIT_WEEKLY=2" "TIMELINE_LIMIT_MONTHLY=2" "TIMELINE_LIMIT_YEARLY=0"
+sudo systemctl enable --now snapper-timeline.timer snapper-cleanup.timer
+log "Snapper home timeline enabled (hourly snapshots, 7-day retention)"
+
+log "Configuring logind to ignore power key (let WM handle it)..."
+sudo mkdir -p /etc/systemd/logind.conf.d
+sudo tee /etc/systemd/logind.conf.d/10-power-key.conf > /dev/null <<'EOF'
+[Login]
+HandlePowerKey=ignore
+EOF
+log "Power key handler set to ignore (WM keybind will fire)"
 
 log "Post-install configuration complete!"
 log "NFS mount: /mnt/music"

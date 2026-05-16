@@ -32,6 +32,34 @@ ColumnLayout {
     }
   }
 
+  // Auto-update toggle
+  NToggle {
+    label: I18n.tr("panels.plugins.auto-update")
+    description: I18n.tr("panels.plugins.auto-update-description")
+    checked: Settings.data.plugins.autoUpdate
+    onToggled: checked => Settings.data.plugins.autoUpdate = checked
+  }
+
+  // Update notification toggle
+  NToggle {
+    label: I18n.tr("panels.plugins.notify-updates")
+    description: I18n.tr("panels.plugins.notify-updates-description")
+    checked: Settings.data.plugins.notifyUpdates
+    onToggled: checked => Settings.data.plugins.notifyUpdates = checked
+  }
+
+  // Check for updates button
+  NButton {
+    property bool isChecking: Object.keys(PluginService.activeFetches).length > 0
+
+    text: isChecking ? I18n.tr("panels.plugins.checking-for-updates") : I18n.tr("panels.plugins.check-for-updates")
+    icon: "refresh"
+    enabled: !isChecking
+    visible: Object.keys(PluginService.pluginUpdates).length === 0
+    Layout.fillWidth: true
+    onClicked: PluginService.checkForUpdates()
+  }
+
   // Update All button
   NButton {
     property int updateCount: Object.keys(PluginService.pluginUpdates).length
@@ -41,7 +69,7 @@ ColumnLayout {
                     "count": updateCount
                   })
     icon: "download"
-    visible: updateCount >= 2
+    visible: (updateCount > 0)
     enabled: !isUpdating
     backgroundColor: Color.mPrimary
     textColor: Color.mOnPrimary
@@ -127,7 +155,7 @@ ColumnLayout {
         Layout.fillWidth: true
         Layout.leftMargin: Style.borderS
         Layout.rightMargin: Style.borderS
-        implicitHeight: Math.round(contentColumn.implicitHeight + Style.marginL * 2)
+        implicitHeight: Math.round(contentColumn.implicitHeight + Style.margin2L)
         color: Color.mSurface
 
         ColumnLayout {
@@ -158,8 +186,8 @@ ColumnLayout {
               visible: modelData.official === true
               color: Color.mSecondary
               radius: Style.radiusXS
-              implicitWidth: officialBadgeRow.implicitWidth + Style.marginS * 2
-              implicitHeight: officialBadgeRow.implicitHeight + Style.marginXS * 2
+              implicitWidth: officialBadgeRow.implicitWidth + Style.margin2S
+              implicitHeight: officialBadgeRow.implicitHeight + Style.margin2XS
 
               RowLayout {
                 id: officialBadgeRow
@@ -186,6 +214,15 @@ ColumnLayout {
               Layout.fillWidth: true
             }
 
+            NIconButtonHot {
+              icon: "bug"
+              hot: PluginService.isPluginHotReloadEnabled(modelData.id)
+              tooltipText: PluginService.isPluginHotReloadEnabled(modelData.id) ? I18n.tr("panels.plugins.development-disable") : I18n.tr("panels.plugins.development-enable")
+              baseSize: Style.baseWidgetSize * 0.7
+              onClicked: PluginService.togglePluginHotReload(modelData.id)
+              visible: Settings.isDebug
+            }
+
             NIconButton {
               icon: "settings"
               tooltipText: I18n.tr("panels.plugins.settings-tooltip")
@@ -201,8 +238,11 @@ ColumnLayout {
               icon: "external-link"
               tooltipText: I18n.tr("panels.plugins.open-plugin-page")
               baseSize: Style.baseWidgetSize * 0.7
-              visible: modelData.isFromOfficialRepo
-              onClicked: Qt.openUrlExternally("https://noctalia.dev/plugins/" + modelData.id)
+              visible: true
+              onClicked: {
+                var sourceUrl = PluginRegistry.getPluginSourceUrl(modelData.compositeKey) || "";
+                Qt.openUrlExternally(sourceUrl && !PluginRegistry.isMainSource(sourceUrl) ? sourceUrl : "https://noctalia.dev/plugins/" + modelData.id);
+              }
             }
 
             NIconButton {
@@ -456,6 +496,8 @@ ColumnLayout {
   function uninstallPlugin(pluginId) {
     var manifest = PluginRegistry.getPluginManifest(pluginId);
     var pluginName = manifest?.name || pluginId;
+
+    BarService.widgetsRevision++;
 
     ToastService.showNotice(I18n.tr("panels.plugins.title"), I18n.tr("panels.plugins.uninstalling", {
                                                                        "plugin": pluginName

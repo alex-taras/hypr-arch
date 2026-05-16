@@ -11,6 +11,7 @@ Singleton {
   property list<var> ddcMonitors: []
   readonly property list<Monitor> monitors: variants.instances
   property bool appleDisplayPresent: false
+  property list<var> availableBacklightDevices: []
 
   function getMonitorForScreen(screen: ShellScreen): var {
     return monitors.find(m => m.modelData === screen);
@@ -47,10 +48,109 @@ Singleton {
     return detectedDisplays;
   }
 
+  function normalizeBacklightDevicePath(devicePath): string {
+    if (devicePath === undefined || devicePath === null)
+      return "";
+
+    var normalized = String(devicePath).trim();
+    if (normalized === "")
+      return "";
+
+    if (normalized.startsWith("/sys/class/backlight/"))
+      return normalized;
+
+    if (normalized.indexOf("/") === -1)
+      return "/sys/class/backlight/" + normalized;
+
+    return normalized;
+  }
+
+  function getBacklightDeviceName(devicePath): string {
+    var normalized = normalizeBacklightDevicePath(devicePath);
+    if (normalized === "")
+      return "";
+
+    var parts = normalized.split("/");
+    while (parts.length > 0 && parts[parts.length - 1] === "") {
+      parts.pop();
+    }
+    return parts.length > 0 ? parts[parts.length - 1] : "";
+  }
+
+  function getMappedBacklightDevice(outputName): string {
+    var normalizedOutput = String(outputName || "").trim();
+    if (normalizedOutput === "")
+      return "";
+
+    var mappings = Settings.data.brightness.backlightDeviceMappings || [];
+    for (var i = 0; i < mappings.length; i++) {
+      var mapping = mappings[i];
+      if (!mapping || typeof mapping !== "object")
+        continue;
+
+      if (String(mapping.output || "").trim() === normalizedOutput)
+        return normalizeBacklightDevicePath(mapping.device || "");
+    }
+
+    return "";
+  }
+
+  function setMappedBacklightDevice(outputName, devicePath): void {
+    var normalizedOutput = String(outputName || "").trim();
+    if (normalizedOutput === "")
+    return;
+
+    var normalizedDevicePath = normalizeBacklightDevicePath(devicePath);
+    var mappings = Settings.data.brightness.backlightDeviceMappings || [];
+    var nextMappings = [];
+    var replaced = false;
+
+    for (var i = 0; i < mappings.length; i++) {
+      var mapping = mappings[i];
+      if (!mapping || typeof mapping !== "object")
+      continue;
+
+      var mappingOutput = String(mapping.output || "").trim();
+      var mappingDevice = normalizeBacklightDevicePath(mapping.device || "");
+      if (mappingOutput === "" || mappingDevice === "")
+      continue;
+
+      if (mappingOutput === normalizedOutput) {
+        if (!replaced && normalizedDevicePath !== "") {
+          nextMappings.push({
+                              "output": normalizedOutput,
+                              "device": normalizedDevicePath
+                            });
+        }
+        replaced = true;
+      } else {
+        nextMappings.push({
+                            "output": mappingOutput,
+                            "device": mappingDevice
+                          });
+      }
+    }
+
+    if (!replaced && normalizedDevicePath !== "") {
+      nextMappings.push({
+                          "output": normalizedOutput,
+                          "device": normalizedDevicePath
+                        });
+    }
+
+    Settings.data.brightness.backlightDeviceMappings = nextMappings;
+  }
+
+  function scanBacklightDevices(): void {
+    if (!scanBacklightProc.running)
+    scanBacklightProc.running = true;
+  }
+
   reloadableId: "brightness"
 
   Component.onCompleted: {
     Logger.i("Brightness", "Service started");
+    scanBacklightDevices();
     if (Settings.data.brightness.enableDdcSupport) {
       ddcProc.running = true;
     }
@@ -58,6 +158,7 @@ Singleton {
 
   onMonitorsChanged: {
     ddcMonitors = [];
+    scanBacklightDevices();
     if (Settings.data.brightness.enableDdcSupport) {
       ddcProc.running = true;
     }
@@ -73,6 +174,14 @@ Singleton {
       } else {
         // Clear DDC monitors when disabled
         ddcMonitors = [];
+      }
+    }
+    function onBacklightDeviceMappingsChanged() {
+      scanBacklightDevices();
+      for (var i = 0; i < monitors.length; i++) {
+        var m = monitors[i];
+        if (m && !m.isDdc && !m.isAppleDisplay)
+          m.initBrightness();
       }
     }
   }
@@ -92,11 +201,39 @@ Singleton {
     }
   }
 
+  // Detect available internal backlight devices
+  Process {
+    id: scanBacklightProc
+    command: ["sh", "-c", "for dev in /sys/class/backlight/*; do if [ -f \"$dev/brightness\" ] && [ -f \"$dev/max_brightness\" ]; then echo \"$dev\"; fi; done"]
+    stdout: StdioCollector {
+      onStreamFinished: {
+        var data = text.trim();
+        if (data === "") {
+          root.availableBacklightDevices = [];
+          return;
+        }
+
+        var lines = data.split("\n");
+        var found = [];
+        var seen = ({});
+        for (var i = 0; i < lines.length; i++) {
+          var path = root.normalizeBacklightDevicePath(lines[i]);
+          if (path === "" || seen[path])
+          continue;
+          seen[path] = true;
+          found.push(path);
+        }
+
+        root.availableBacklightDevices = found;
+      }
+    }
+  }
+
   // Detect DDC monitors
   Process {
     id: ddcProc
     property list<var> ddcMonitors: []
-    command: ["ddcutil", "detect", "--sleep-multiplier=0.5"]
+    command: ["ddcutil", "detect", "--enable-dynamic-sleep", "--sleep-multiplier=0.5"]
     stdout: StdioCollector {
       onStreamFinished: {
         var displays = text.trim().split("\n\n");
@@ -152,6 +289,7 @@ Singleton {
     property string maxBrightnessPath: ""
     property int maxBrightness: 100
     property bool ignoreNextChange: false
+    property bool initInProgress: false
 
     // Signal for brightness changes
     signal brightnessUpdated(real newBrightness)
@@ -227,9 +365,9 @@ Singleton {
         // For internal displays, query the system directly
         refreshProc.command = ["sh", "-c", "cat " + monitor.brightnessPath + " && " + "cat " + monitor.maxBrightnessPath];
         refreshProc.running = true;
-      } else if (monitor.isDdc) {
+      } else if (monitor.isDdc && monitor.busNum !== "") {
         // For DDC displays, get the current value
-        refreshProc.command = ["ddcutil", "-b", monitor.busNum, "getvcp", "10", "--brief"];
+        refreshProc.command = ["ddcutil", "-b", monitor.busNum, "--enable-dynamic-sleep", "--sleep-multiplier=0.05", "getvcp", "10", "--brief"];
         refreshProc.running = true;
       } else if (monitor.isAppleDisplay) {
         // For Apple displays, get the current value
@@ -296,22 +434,26 @@ Singleton {
                 Logger.d("Brightness", "Internal brightness:", current + "/" + max + " =", monitor.brightness);
                 Logger.d("Brightness", "Using backlight device:", monitor.backlightDevice);
               }
+            } else {
+              monitor.backlightDevice = "";
+              monitor.brightnessPath = "";
+              monitor.maxBrightnessPath = "";
             }
           }
 
-          // Always update
-          monitor.brightnessUpdated(monitor.brightness);
-          root.monitorBrightnessChanged(monitor, monitor.brightness);
+          monitor.initInProgress = false;
         }
+      }
+      onExited: (exitCode, exitStatus) => {
+        monitor.initInProgress = false;
       }
     }
 
     readonly property real stepSize: Settings.data.brightness.brightnessStep / 100.0
-    readonly property real minBrightnessValue: (Settings.data.brightness.enforceMinimum ? 0.01 : 0.0)
 
     // Timer for debouncing rapid changes
     readonly property Timer timer: Timer {
-      interval: 100
+      interval: monitor.isDdc ? 250 : 33
       onTriggered: {
         if (!isNaN(monitor.queuedBrightness)) {
           monitor.setBrightness(monitor.queuedBrightness);
@@ -320,21 +462,6 @@ Singleton {
       }
     }
 
-    // Disabled as this is very inneficient and create spikes lag on many computers due to I2C being very slow and synchronous.
-    // // Timer for polling DDC monitor brightness (every 30 seconds)
-    // readonly property Timer pollTimer: Timer {
-    //   interval: 30000
-    //   repeat: true
-    //   running: monitor.isDdc
-    //   triggeredOnStart: true
-    //   onTriggered: {
-    //     // Only refresh if not currently setting brightness
-    //     if (!monitor.commandRunning && isNaN(monitor.queuedBrightness)) {
-    //       monitor.refreshBrightnessFromSystem();
-    //     }
-    //   }
-    // }
-
     function setBrightnessDebounced(value: real): void {
       monitor.queuedBrightness = value;
       timer.start();
@@ -342,13 +469,7 @@ Singleton {
 
     function increaseBrightness(): void {
       const value = !isNaN(monitor.queuedBrightness) ? monitor.queuedBrightness : monitor.brightness;
-      // Enforce minimum brightness if enabled
-      if (Settings.data.brightness.enforceMinimum && value < minBrightnessValue) {
-        setBrightnessDebounced(Math.max(stepSize, minBrightnessValue));
-      } else {
-        // Normal brightness increase
-        setBrightnessDebounced(value + stepSize);
-      }
+      setBrightnessDebounced(value + stepSize);
     }
 
     function decreaseBrightness(): void {
@@ -357,7 +478,8 @@ Singleton {
     }
 
     function setBrightness(value: real): void {
-      value = Math.max(minBrightnessValue, Math.min(1, value));
+      var min = Settings.data.brightness.enforceMinimum && isDdc ? 0.01 : 0;
+      value = Math.max(min, Math.min(1, value));
       var rounded = Math.round(value * 100);
 
       // Always update internal value and trigger UI feedback immediately
@@ -377,38 +499,57 @@ Singleton {
       }
 
       // Execute the brightness change command
-      monitor.commandRunning = true;
-      monitor.ignoreNextChange = true;
-
       if (isAppleDisplay) {
+        monitor.commandRunning = true;
+        monitor.ignoreNextChange = true;
         setBrightnessProc.command = ["asdbctl", "set", rounded];
         setBrightnessProc.running = true;
-      } else if (isDdc) {
+      } else if (isDdc && busNum !== "") {
+        monitor.commandRunning = true;
+        monitor.ignoreNextChange = true;
         var ddcValue = Math.round(value * monitor.maxBrightness);
-        setBrightnessProc.command = ["ddcutil", "-b", busNum, "--sleep-multiplier=0.05", "setvcp", "10", ddcValue];
-        setBrightnessProc.running = true;
-      } else {
-        setBrightnessProc.command = ["brightnessctl", "s", rounded + "%"];
+        var ddcBus = busNum;
+        Qt.callLater(() => {
+                       setBrightnessProc.command = ["ddcutil", "-b", ddcBus, "--noverify", "--async", "--enable-dynamic-sleep", "--sleep-multiplier=0.05", "setvcp", "10", ddcValue];
+                       setBrightnessProc.running = true;
+                     });
+      } else if (!isDdc) {
+        monitor.commandRunning = true;
+        monitor.ignoreNextChange = true;
+        var setMin = Settings.data.brightness.enforceMinimum ? "-n" : "";
+        var backlightDeviceName = root.getBacklightDeviceName(monitor.backlightDevice);
+        if (backlightDeviceName !== "") {
+          setBrightnessProc.command = ["brightnessctl", "-d", backlightDeviceName, "s", rounded + "%", setMin];
+        } else {
+          setBrightnessProc.command = ["brightnessctl", "s", rounded + "%", setMin];
+        }
         setBrightnessProc.running = true;
       }
     }
 
     function initBrightness(): void {
+      monitor.initInProgress = true;
       if (isAppleDisplay) {
         initProc.command = ["asdbctl", "get"];
-      } else if (isDdc) {
-        initProc.command = ["ddcutil", "-b", busNum, "getvcp", "10", "--brief"];
+        initProc.running = true;
+      } else if (isDdc && busNum !== "") {
+        initProc.command = ["ddcutil", "-b", busNum, "--enable-dynamic-sleep", "--sleep-multiplier=0.05", "getvcp", "10", "--brief"];
+        initProc.running = true;
+      } else if (!isDdc) {
+        // Internal backlight: first try explicit output mapping, then fall back to first available.
+        var preferredDevicePath = root.getMappedBacklightDevice(modelData.name);
+        var probeScript = ["preferred=\"$1\"", "if [ -n \"$preferred\" ] && [ ! -d \"$preferred\" ]; then preferred=\"/sys/class/backlight/$preferred\"; fi", "selected=\"\"",
+                           "if [ -n \"$preferred\" ] && [ -f \"$preferred/brightness\" ] && [ -f \"$preferred/max_brightness\" ]; then selected=\"$preferred\"; else for dev in /sys/class/backlight/*; do if [ -f \"$dev/brightness\" ] && [ -f \"$dev/max_brightness\" ]; then selected=\"$dev\"; break; fi; done; fi",
+                           "if [ -n \"$selected\" ]; then echo \"$selected\"; cat \"$selected/brightness\"; cat \"$selected/max_brightness\"; fi"].join("; ");
+        initProc.command = ["sh", "-c", probeScript, "sh", preferredDevicePath];
+        initProc.running = true;
       } else {
-        // Internal backlight - find the first available backlight device and get its info
-        // This now returns: device_path, current_brightness, max_brightness (on separate lines)
-        initProc.command = ["sh", "-c", "for dev in /sys/class/backlight/*; do " + "  if [ -f \"$dev/brightness\" ] && [ -f \"$dev/max_brightness\" ]; then " + "    echo \"$dev\"; " + "    cat \"$dev/brightness\"; " + "    cat \"$dev/max_brightness\"; " + "    break; " + "  fi; " + "done"];
+        monitor.initInProgress = false;
       }
-      initProc.running = true;
     }
 
     onBusNumChanged: initBrightness()
-    onIsDdcChanged: if (isDdc)
-    initBrightness()
+    onIsDdcChanged: initBrightness()
     Component.onCompleted: initBrightness()
   }
 }

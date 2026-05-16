@@ -21,8 +21,10 @@ Item {
   readonly property bool isDragging: internal.isDragging
   readonly property bool isScaling: internal.isScaling
 
-  property bool showBackground: (widgetData && widgetData.showBackground !== undefined) ? widgetData.showBackground : true
-  property bool roundedCorners: (widgetData && widgetData.roundedCorners !== undefined) ? widgetData.roundedCorners : true
+  // All Desktop widgets have these settings, but fallback just in case
+  readonly property var _metadata: widgetData?.id ? DesktopWidgetRegistry.widgetMetadata[widgetData.id] : null
+  property bool showBackground: widgetData.showBackground !== undefined ? widgetData.showBackground : (_metadata?.showBackground ?? true)
+  property bool roundedCorners: widgetData.roundedCorners !== undefined ? widgetData.roundedCorners : (_metadata?.roundedCorners ?? true)
 
   property real widgetScale: 1.0
   property real minScale: 0.5
@@ -113,27 +115,40 @@ Item {
     return Math.round(coord / root.gridSize) * root.gridSize;
   }
 
+  function snapScaleToGrid(scale) {
+    if (!Settings.data.desktopWidgets.gridSnap || !Settings.data.desktopWidgets.gridSnapScale) {
+      return scale;
+    }
+
+    // Get widget's base width
+    var initialWidth = internal.initialWidth;
+    var initialScale = internal.initialScale;
+    if (initialWidth <= 0 || initialScale <= 0) {
+      return scale;
+    }
+
+    // Since initialWidth = baseWidth * initialScale
+    var baseWidth = initialWidth / initialScale;
+
+    // Snap the resulting width with the scale
+    var resultingWidth = baseWidth * scale;
+    var snappedWidth = root.snapToGrid(resultingWidth);
+
+    // Check that the snappedWidth isn't smaller than one grid size
+    if (snappedWidth < root.gridSize) {
+      snappedWidth = root.gridSize;
+    }
+
+    // Return the ratio of the snappedWidth and the baseWidth, which is the new snapped scale
+    var snappedScale = snappedWidth / baseWidth;
+    return Math.max(minScale, Math.min(maxScale, snappedScale));
+  }
+
   function updateWidgetData(properties) {
     if (widgetIndex < 0 || !screen || !screen.name) {
       return;
     }
-
-    var monitorWidgets = Settings.data.desktopWidgets.monitorWidgets || [];
-    var newMonitorWidgets = monitorWidgets.slice();
-
-    for (var i = 0; i < newMonitorWidgets.length; i++) {
-      if (newMonitorWidgets[i].name === screen.name) {
-        var widgets = (newMonitorWidgets[i].widgets || []).slice();
-        if (widgetIndex < widgets.length) {
-          widgets[widgetIndex] = Object.assign({}, widgets[widgetIndex], properties);
-          newMonitorWidgets[i] = Object.assign({}, newMonitorWidgets[i], {
-                                                 "widgets": widgets
-                                               });
-          Settings.data.desktopWidgets.monitorWidgets = newMonitorWidgets;
-        }
-        break;
-      }
-    }
+    DesktopWidgetRegistry.updateWidgetData(screen.name, widgetIndex, properties);
   }
 
   function removeWidget() {
@@ -208,79 +223,7 @@ Item {
   }
 
   function openWidgetSettings() {
-    if (!widgetData || !widgetData.id || !screen) {
-      return;
-    }
-
-    var widgetId = widgetData.id;
-    var hasSettings = false;
-
-    // Check if widget has settings
-    if (DesktopWidgetRegistry.isPluginWidget(widgetId)) {
-      var pluginId = widgetId.replace("plugin:", "");
-      var manifest = PluginRegistry.getPluginManifest(pluginId);
-      if (manifest && manifest.entryPoints && manifest.entryPoints.settings) {
-        hasSettings = true;
-      }
-    } else {
-      hasSettings = DesktopWidgetRegistry.widgetSettingsMap[widgetId] !== undefined;
-    }
-
-    if (!hasSettings) {
-      Logger.w("DraggableDesktopWidget", "Widget does not have settings:", widgetId);
-      return;
-    }
-
-    var popupMenuWindow = PanelService.getPopupMenuWindow(screen);
-    if (!popupMenuWindow) {
-      Logger.e("DraggableDesktopWidget", "No popup menu window found for screen");
-      return;
-    }
-
-    // Hide the dynamic context menu (popup window stays open for the dialog)
-    if (popupMenuWindow.hideDynamicMenu) {
-      popupMenuWindow.hideDynamicMenu();
-    }
-
-    var component = Qt.createComponent(Quickshell.shellDir + "/Modules/Panels/Settings/DesktopWidgets/DesktopWidgetSettingsDialog.qml");
-
-    function instantiateAndOpen() {
-      var dialog = component.createObject(popupMenuWindow.dialogParent, {
-                                            "widgetIndex": widgetIndex,
-                                            "widgetData": widgetData,
-                                            "widgetId": widgetId,
-                                            "sectionId": screen.name
-                                          });
-
-      if (dialog) {
-        dialog.updateWidgetSettings.connect((sec, idx, settings) => {
-                                              root.updateWidgetData(settings);
-                                            });
-        popupMenuWindow.hasDialog = true;
-        dialog.closed.connect(() => {
-                                popupMenuWindow.hasDialog = false;
-                                popupMenuWindow.close();
-                                dialog.destroy();
-                              });
-        dialog.open();
-      } else {
-        Logger.e("DraggableDesktopWidget", "Failed to create widget settings dialog");
-      }
-    }
-
-    if (component.status === Component.Ready) {
-      instantiateAndOpen();
-    } else if (component.status === Component.Error) {
-      Logger.e("DraggableDesktopWidget", "Error loading settings dialog component:", component.errorString());
-    } else {
-      component.statusChanged.connect(() => {
-                                        if (component.status === Component.Ready) {
-                                          instantiateAndOpen();
-                                        } else if (component.status === Component.Error) {
-                                          Logger.e("DraggableDesktopWidget", "Error loading settings dialog component:", component.errorString());
-                                        }
-                                      });
-    }
+    DesktopWidgetRegistry.openWidgetSettings(screen, widgetIndex, widgetData.id, widgetData);
   }
 
   function handleContextMenuAction(action) {
@@ -346,14 +289,14 @@ Item {
     color: DesktopWidgetRegistry.editMode ? Qt.rgba(Color.mPrimary.r, Color.mPrimary.g, Color.mPrimary.b, 0.1) : "transparent"
     border.color: (DesktopWidgetRegistry.editMode || internal.isDragging) ? (internal.isDragging ? Color.mOutline : Color.mPrimary) : "transparent"
     border.width: DesktopWidgetRegistry.editMode ? 3 : 0
-    radius: Math.round(Style.radiusL * root.widgetScale)
+    radius: Math.min(Math.round(Style.radiusL * root.widgetScale), Style.radiusL, width / 2, height / 2)
     z: -1
   }
 
   Rectangle {
     id: container
     anchors.fill: parent
-    radius: root.roundedCorners ? Math.round(Style.radiusL * root.widgetScale) : 0
+    radius: root.roundedCorners ? Math.min(Math.round(Style.radiusL * root.widgetScale), Style.radiusL, width / 2, height / 2) : 0
     color: Qt.alpha(Color.mSurface, Settings.data.ui.panelBackgroundOpacity)
     border {
       width: 1
@@ -378,6 +321,7 @@ Item {
     id: contentContainer
     anchors.fill: parent
     z: 1
+    clip: true
   }
 
   // Context menu model and handler - menu is created dynamically in PopupMenuWindow
@@ -388,7 +332,7 @@ Item {
       if (DesktopWidgetRegistry.isPluginWidget(widgetId)) {
         var pluginId = widgetId.replace("plugin:", "");
         var manifest = PluginRegistry.getPluginManifest(pluginId);
-        hasSettings = manifest && manifest.entryPoints && manifest.entryPoints.settings;
+        hasSettings = manifest && manifest.entryPoints && (manifest.entryPoints.settings || manifest.entryPoints.desktopWidgetSettings);
       } else {
         hasSettings = DesktopWidgetRegistry.widgetSettingsMap[widgetId] !== undefined;
       }
@@ -639,6 +583,8 @@ Item {
                      internal.isScaling = true;
                      internal.initialScale = root.widgetScale;
                      internal.lastScale = root.widgetScale;
+                     internal.initialWidth = root.width;
+                     internal.initialHeight = root.height;
                    }
 
         onPositionChanged: mouse => {
@@ -656,6 +602,8 @@ Item {
                                var scaleDelta = diagonalDelta / sensitivity;
                                var newScale = Math.max(root.minScale, Math.min(root.maxScale, internal.initialScale + scaleDelta));
 
+                               newScale = root.snapScaleToGrid(newScale);
+
                                if (!isNaN(newScale) && newScale > 0) {
                                  root.widgetScale = newScale;
                                  internal.lastScale = newScale;
@@ -670,6 +618,7 @@ Item {
                                               });
                         internal.isScaling = false;
                         internal.operationType = "";
+                        root.widgetScale = root.snapScaleToGrid(root.widgetScale);
                         internal.lastScale = root.widgetScale;
                       }
                     }

@@ -79,6 +79,7 @@ ColumnLayout {
     from: 0
     to: 100
     stepSize: 1
+    showReset: true
     value: Settings.data.osd.backgroundOpacity * 100
     defaultValue: (Settings.getDefaultValue("osd.backgroundOpacity") || 1) * 100
     onMoved: value => Settings.data.osd.backgroundOpacity = value / 100
@@ -92,6 +93,7 @@ ColumnLayout {
     from: 500
     to: 5000
     stepSize: 100
+    showReset: true
     value: Settings.data.osd.autoHideMs
     defaultValue: Settings.getDefaultValue("osd.autoHideMs")
     onMoved: value => Settings.data.osd.autoHideMs = value
@@ -112,9 +114,12 @@ ColumnLayout {
     model: Quickshell.screens || []
     delegate: NCheckbox {
       Layout.fillWidth: true
+      readonly property real compositorScale: {
+        const info = CompositorService.displayScales[modelData.name];
+        return (info && info.scale) ? info.scale : 1.0;
+      }
       label: modelData.name || I18n.tr("common.unknown")
       description: {
-        const compositorScale = CompositorService.getDisplayScale(modelData.name);
         I18n.tr("system.monitor-description", {
                   "model": modelData.model,
                   "width": modelData.width * compositorScale,

@@ -17,8 +17,11 @@ NBox {
   property var availableSections: ["left", "center", "right"]
   property var sectionLabels: ({}) // Map of sectionId -> display label
   property var sectionIcons: ({}) // Map of sectionId -> icon name
+  property bool barIsVertical: false // When true, map left/right to top/bottom in labels
   property int maxWidgets: -1 // -1 means unlimited
   property bool draggable: true // Enable/disable drag reordering
+  property bool crossSectionDraggable: false
+  property alias dropTargetArea: gridContainer
 
   // Get display label for a section
   function getSectionLabel(sectionId) {
@@ -36,10 +39,63 @@ NBox {
     return "arrow-right"; // Default fallback icon
   }
 
+  property var pluginSettingsEntryPoints: ["settings"]
   property var widgetRegistry: null
   property string settingsDialogComponent: "invalid-settings-dialog"
   property var screen: null // Screen reference for per-screen widget settings
   property var _activeDialog: null
+  property bool crossDropHoverActive: false
+
+  function clearCrossSectionHover() {
+    crossDropHoverActive = false;
+
+    var parentItem = root.parent;
+    if (!parentItem || !parentItem.children) {
+      return;
+    }
+
+    for (var i = 0; i < parentItem.children.length; i++) {
+      var candidate = parentItem.children[i];
+      if (!candidate || candidate.crossDropHoverActive === undefined)
+        continue;
+      candidate.crossDropHoverActive = false;
+    }
+  }
+
+  function updateCrossSectionHover(globalX, globalY) {
+    var parentItem = root.parent;
+    if (!parentItem || !parentItem.children) {
+      crossDropHoverActive = false;
+      return;
+    }
+
+    crossDropHoverActive = false;
+
+    for (var i = 0; i < parentItem.children.length; i++) {
+      var candidate = parentItem.children[i];
+      if (!candidate || candidate.sectionId === undefined || candidate.crossDropHoverActive === undefined) {
+        continue;
+      }
+
+      var shouldHighlight = false;
+      if (candidate !== root && candidate.visible && candidate.enabled) {
+        var localPoint = candidate.mapFromGlobal(globalX, globalY);
+        var area = candidate.dropTargetArea ? candidate.dropTargetArea : candidate;
+        shouldHighlight = localPoint.x >= area.x && localPoint.y >= area.y && localPoint.x <= area.x + area.width && localPoint.y <= area.y + area.height;
+      }
+
+      candidate.crossDropHoverActive = shouldHighlight;
+    }
+  }
+
+  function isPointInsideSelf(globalX, globalY) {
+    if (globalX < 0 || globalY < 0)
+      return false;
+    var localPoint = root.mapFromGlobal(globalX, globalY);
+    return localPoint.x >= 0 && localPoint.y >= 0 && localPoint.x <= root.width && localPoint.y <= root.height;
+  }
+
+  readonly property bool showCrossSectionDropHint: crossDropHoverActive
 
   Component.onDestruction: {
     if (_activeDialog && _activeDialog.close) {
@@ -62,11 +118,11 @@ NBox {
   signal moveWidget(string fromSection, int index, string toSection)
   signal dragPotentialStarted
   signal dragPotentialEnded
-  signal openPluginSettingsRequested(var pluginManifest)
+  signal openPluginSettingsRequested(var pluginManifest, string settingsEntryPoint)
 
   color: Color.mSurface
-  opacity: enabled ? 1.0 : 0.6
   Layout.fillWidth: true
+  z: flowDragArea.dragStarted ? 5000 : 0
 
   // Calculate width to fit gridColumns widgets with spacing
   function calculateWidgetWidth(gridWidth) {
@@ -75,9 +131,36 @@ NBox {
     return Math.floor(widgetWidth);
   }
 
+  function findSectionAtGlobalPosition(globalX, globalY) {
+    var parentItem = root.parent;
+    if (!parentItem || !parentItem.children) {
+      return "";
+    }
+
+    for (var i = 0; i < parentItem.children.length; i++) {
+      var candidate = parentItem.children[i];
+      if (!candidate || candidate === root) {
+        continue;
+      }
+
+      // Only consider sibling section editors
+      if (candidate.sectionId === undefined || !candidate.visible || !candidate.enabled) {
+        continue;
+      }
+
+      var localPoint = candidate.mapFromGlobal(globalX, globalY);
+      var area = candidate.dropTargetArea ? candidate.dropTargetArea : candidate;
+      if (localPoint.x >= area.x && localPoint.y >= area.y && localPoint.x <= area.x + area.width && localPoint.y <= area.y + area.height) {
+        return candidate.sectionId;
+      }
+    }
+
+    return "";
+  }
+
   Layout.minimumHeight: {
     // header + minimal content area
-    var absoluteMin = (Style.marginL * 2) + (Style.fontSizeL * 2) + Style.marginM + (65 * Style.uiScaleRatio);
+    var absoluteMin = Style.margin2L + (Style.fontSizeL * 2) + Style.marginM + (65 * Style.uiScaleRatio);
 
     var widgetCount = widgetModel.length;
     if (widgetCount === 0) {
@@ -86,7 +169,7 @@ NBox {
 
     // Calculate rows based on grid layout
     // Use actual parent width if available, otherwise estimate
-    var availableWidth = (parent && parent.width > 0) ? (parent.width - (Style.marginL * 2)) : 400;
+    var availableWidth = (parent && parent.width > 0) ? (parent.width - Style.margin2L) : 400;
     var rows = Math.ceil(widgetCount / root.gridColumns);
 
     // Calculate widget width for height calculation
@@ -100,7 +183,7 @@ NBox {
     var gridBottomMargin = Style.marginL;
     var widgetAreaHeight = gridTopMargin + (rows * widgetItemHeight) + ((rows - 1) * Style.marginL) + gridBottomMargin;
 
-    return Math.max(absoluteMin, (Style.marginL * 2) + headerHeight + Style.marginM + widgetAreaHeight);
+    return Math.max(absoluteMin, Style.margin2L + headerHeight + Style.marginM + widgetAreaHeight);
   }
 
   // Generate widget color from name checksum
@@ -111,18 +194,24 @@ NBox {
     return [Color.mPrimary, Color.mOnPrimary];
   }
 
-  // Check if widget has settings (either core widget with allowUserSettings or plugin with settings entry point)
+  // Check if widget has settings (either core widget with metadata or plugin with settings entry point)
   function widgetHasSettings(widgetId) {
-    // Check if it's a core widget with user settings
-    if (root.widgetRegistry && root.widgetRegistry.widgetHasUserSettings(widgetId)) {
-      return true;
-    }
-
     // Check if it's a plugin with settings
     if (root.widgetRegistry && root.widgetRegistry.isPluginWidget(widgetId)) {
       var pluginId = widgetId.replace("plugin:", "");
       var manifest = PluginRegistry.getPluginManifest(pluginId);
-      return manifest?.entryPoints?.settings !== undefined;
+      if (!manifest?.entryPoints)
+        return false;
+      for (var i = 0; i < root.pluginSettingsEntryPoints.length; i++) {
+        if (manifest.entryPoints[root.pluginSettingsEntryPoints[i]] !== undefined)
+          return true;
+      }
+      return false;
+    }
+
+    // Check if it's a core widget with user settings
+    if (root.widgetRegistry && root.widgetRegistry.widgetHasUserSettings(widgetId)) {
+      return true;
     }
 
     return false;
@@ -130,23 +219,38 @@ NBox {
 
   // Open settings for a widget
   function openWidgetSettings(index, widgetData) {
-    // Check if this is a plugin widget
+    // Check if this is a plugin widget with a generic "settings" entry point
     var isPlugin = root.widgetRegistry && root.widgetRegistry.isPluginWidget(widgetData.id);
 
     if (isPlugin) {
-      // Handle plugin settings - emit signal for parent to handle
       var pluginId = widgetData.id.replace("plugin:", "");
       var manifest = PluginRegistry.getPluginManifest(pluginId);
 
-      if (!manifest || !manifest.entryPoints?.settings) {
+      var settingsKey = null;
+      if (manifest?.entryPoints) {
+        for (var i = 0; i < root.pluginSettingsEntryPoints.length; i++) {
+          if (manifest.entryPoints[root.pluginSettingsEntryPoints[i]] !== undefined) {
+            settingsKey = root.pluginSettingsEntryPoints[i];
+            break;
+          }
+        }
+      }
+      if (!manifest || !settingsKey) {
         Logger.e("NSectionEditor", "Plugin settings not found for:", pluginId);
         return;
       }
 
-      // Emit signal to request opening plugin settings
-      root.openPluginSettingsRequested(manifest);
-    } else {
-      // Handle core widget settings
+      // "desktopWidgetSettings" is handled by the settingsDialogComponent
+      // (DesktopWidgetSettingsDialog) which passes widgetSettings/save properly.
+      // Only generic "settings" goes through the plugin settings popup.
+      if (settingsKey !== "desktopWidgetSettings") {
+        root.openPluginSettingsRequested(manifest, settingsKey);
+        return;
+      }
+    }
+
+    // Handle core widgets and plugin desktop widget settings
+    {
       var component = Qt.createComponent(Qt.resolvedUrl(root.settingsDialogComponent));
 
       function instantiateAndOpen() {
@@ -163,7 +267,8 @@ NBox {
                                               "widgetData": widgetData,
                                               "widgetId": widgetData.id,
                                               "sectionId": root.sectionId,
-                                              "screen": root.screen
+                                              "screen": root.screen,
+                                              "barIsVertical": root.barIsVertical
                                             });
 
         if (dialog) {
@@ -319,10 +424,20 @@ NBox {
         var gridTopMargin = Style.marginS;
         var gridBottomMargin = Style.marginS;
         var calculatedHeight = gridTopMargin + (rows * root.widgetItemHeight) + ((rows - 1) * Style.marginS) + gridBottomMargin;
-        return Math.max(65 * Style.uiScaleRatio, calculatedHeight);
+        return calculatedHeight;
       }
-      Layout.minimumHeight: 65 * Style.uiScaleRatio
-      clip: true // Clip to prevent overflow
+      Layout.minimumHeight: widgetModel.length === 0 ? (65 * Style.uiScaleRatio) : (Style.margin2S + root.widgetItemHeight)
+      clip: !flowDragArea.dragStarted
+
+      Rectangle {
+        anchors.fill: parent
+        radius: Style.iRadiusL
+        color: Qt.alpha(Color.mSecondary, 0.12)
+        border.color: Color.mSecondary
+        border.width: Style.borderM
+        visible: root.showCrossSectionDropHint
+        z: 1500
+      }
 
       Grid {
         id: widgetGrid
@@ -388,8 +503,16 @@ NBox {
                   if (section !== root.sectionId) {
                     var label = root.getSectionLabel(section);
                     var displayLabel = '';
-                    if (I18n.hasTranslation("positions." + section)) {
-                      displayLabel = I18n.tr("positions." + section);
+                    // Map section IDs to correct position keys based on bar orientation
+                    var positionKey = section;
+                    if (root.barIsVertical) {
+                      if (section === "left")
+                        positionKey = "top";
+                      else if (section === "right")
+                        positionKey = "bottom";
+                    }
+                    if (I18n.hasTranslation("positions." + positionKey)) {
+                      displayLabel = I18n.tr("positions." + positionKey);
                     } else {
                       displayLabel = label.charAt(0).toUpperCase() + label.slice(1);
                     }
@@ -479,6 +602,16 @@ NBox {
               NIcon {
                 visible: root.widgetRegistry && root.widgetRegistry.isPluginWidget(modelData.id)
                 icon: "plugin"
+                pointSize: Style.fontSizeXXS
+                color: root.getWidgetColor(modelData)[1]
+                Layout.preferredWidth: visible ? Style.baseWidgetSize * 0.5 : 0
+                Layout.preferredHeight: Style.baseWidgetSize * 0.5
+              }
+
+              // CPU intensive indicator icon
+              NIcon {
+                visible: root.widgetRegistry && root.widgetRegistry.isCpuIntensive(modelData.id)
+                icon: "cpu-intensive"
                 pointSize: Style.fontSizeXXS
                 color: root.getWidgetColor(modelData)[1]
                 Layout.preferredWidth: visible ? Style.baseWidgetSize * 0.5 : 0
@@ -580,7 +713,7 @@ NBox {
         id: flowDragArea
         anchors.fill: parent
         z: 100 // Above widgets to ensure it captures events first
-        enabled: root.draggable
+        enabled: root.draggable || root.crossSectionDraggable
 
         acceptedButtons: Qt.LeftButton
         preventStealing: true // Always prevent stealing to ensure we get all events
@@ -697,6 +830,7 @@ NBox {
         }
 
         function resetDragState() {
+          root.clearCrossSectionHover();
           dragStarted = false;
           potentialDrag = false;
           draggedIndex = -1;
@@ -769,12 +903,18 @@ NBox {
                                    dragGhost.color = root.getWidgetColor(draggedModelData)[0];
                                    ghostText.text = draggedModelData.id;
                                  }
+
+                                 var startGlobal = flowDragArea.mapToGlobal(mouse.x, mouse.y);
+                                 root.updateCrossSectionHover(startGlobal.x, startGlobal.y);
                                }
 
                                if (dragStarted) {
                                  // Move ghost widget
                                  dragGhost.x = mouse.x - dragGhost.width / 2;
                                  dragGhost.y = mouse.y - dragGhost.height / 2;
+
+                                 var moveGlobal = flowDragArea.mapToGlobal(mouse.x, mouse.y);
+                                 root.updateCrossSectionHover(moveGlobal.x, moveGlobal.y);
 
                                  // Update drop indicator
                                  updateDropIndicator(mouse.x, mouse.y);
@@ -783,9 +923,15 @@ NBox {
                            }
 
         onReleased: mouse => {
-                      if (dragStarted && dropTargetIndex !== -1 && dropTargetIndex !== draggedIndex) {
+                      if (root.draggable && dragStarted && dropTargetIndex !== -1 && dropTargetIndex !== draggedIndex) {
                         // Perform the reorder
                         reorderWidget(sectionId, draggedIndex, dropTargetIndex);
+                      } else if (dragStarted && draggedIndex !== -1) {
+                        var globalPos = flowDragArea.mapToGlobal(mouse.x, mouse.y);
+                        var targetSectionId = root.findSectionAtGlobalPosition(globalPos.x, globalPos.y);
+                        if (targetSectionId !== "" && targetSectionId !== root.sectionId) {
+                          root.moveWidget(root.sectionId, draggedIndex, targetSectionId);
+                        }
                       }
 
                       // Always signal end of interaction if we started one

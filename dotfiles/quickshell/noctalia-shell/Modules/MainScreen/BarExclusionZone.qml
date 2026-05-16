@@ -3,6 +3,7 @@ import Quickshell
 import Quickshell.Wayland
 import qs.Commons
 import qs.Services.Compositor
+import qs.Services.UI
 
 /**
 * BarExclusionZone - Invisible PanelWindow that reserves exclusive space for the bar
@@ -17,11 +18,18 @@ PanelWindow {
   property string edge: Settings.getBarPositionForScreen(screen?.name)
   property real thickness: (edge === Settings.getBarPositionForScreen(screen?.name)) ? Style.getBarHeightForScreen(screen?.name) : (Settings.data.bar.frameThickness ?? 12)
 
-  readonly property bool exclusive: Settings.data.bar.exclusive
-  readonly property bool barFloating: Settings.data.bar.floating || false
+  readonly property bool autoHide: Settings.getBarDisplayModeForScreen(screen?.name) === "auto_hide"
+  readonly property bool nonExclusive: Settings.getBarDisplayModeForScreen(screen?.name) === "non_exclusive"
+  readonly property bool barFloating: Settings.data.bar.barType === "floating"
   readonly property real barMarginH: (barFloating && edge === Settings.getBarPositionForScreen(screen?.name)) ? Math.ceil(Settings.data.bar.marginHorizontal) : 0
   readonly property real barMarginV: (barFloating && edge === Settings.getBarPositionForScreen(screen?.name)) ? Math.ceil(Settings.data.bar.marginVertical) : 0
-  readonly property real fractOffset: CompositorService.getDisplayScale(screen?.name) % 1.0
+  // Allow users to enable a 1-physical-pixel inset for the exclusion zone so window borders can bleed under the bar
+  readonly property real bleedOffset: Settings.data.bar.enableExclusionZoneInset ? 1.0 : 0.0
+  readonly property real bleedInset: {
+    const info = CompositorService.displayScales[screen?.name];
+    const scale = (info && info.scale) ? info.scale : 1.0;
+    return bleedOffset / scale;
+  }
 
   // Invisible - just reserves space
   color: "transparent"
@@ -31,7 +39,11 @@ PanelWindow {
   // Wayland layer shell configuration
   WlrLayershell.layer: WlrLayer.Top
   WlrLayershell.namespace: "noctalia-bar-exclusion-" + edge + "-" + (screen?.name || "unknown")
-  WlrLayershell.exclusionMode: exclusive ? ExclusionMode.Auto : ExclusionMode.Ignore
+  // When auto-hide, non-exclusive mode is enabled, OR bar is explicitly hidden via IPC, don't reserve space
+  // Note: We check BarService.isVisible directly, NOT effectivelyVisible, because we want
+  // the exclusion zone to stay during overview (effectivelyVisible is false during overview
+  // when hideOnOverview is enabled, but isVisible remains true)
+  WlrLayershell.exclusionMode: (autoHide || nonExclusive || !BarService.isVisible) ? ExclusionMode.Ignore : ExclusionMode.Auto
 
   // Anchor based on specified edge
   anchors {
@@ -44,14 +56,14 @@ PanelWindow {
   // Size based on orientation
   implicitWidth: {
     if (edge === "left" || edge === "right") {
-      return thickness + barMarginH - fractOffset;
+      return thickness + barMarginH - bleedInset;
     }
     return 0; // Auto-width when left/right anchors are true
   }
 
   implicitHeight: {
     if (edge === "top" || edge === "bottom") {
-      return thickness + barMarginV - fractOffset;
+      return thickness + barMarginV - bleedInset;
     }
     return 0; // Auto-height when top/bottom anchors are true
   }

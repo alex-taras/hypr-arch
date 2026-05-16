@@ -20,6 +20,10 @@ Item {
   required property var keyboardLayout
   required property TextInput passwordInput
 
+  // Whether to enable lock screen animations (smooth cursor blink).
+  // Defaults to false to reduce GPU usage.  Set Settings.data.general.lockScreenAnimations = true to restore.
+  readonly property bool animationsEnabled: Settings.data.general.lockScreenAnimations || false
+
   Component.onCompleted: {
     if (Settings.data.general.autoStartAuth) {
       doUnlock();
@@ -84,6 +88,9 @@ Item {
     case "reboot":
       CompositorService.reboot();
       break;
+    case "userspaceReboot":
+      CompositorService.userspaceReboot();
+      break;
     case "shutdown":
       CompositorService.shutdown();
       break;
@@ -109,12 +116,24 @@ Item {
   // Compact status indicators container (compact mode only)
   Rectangle {
     width: {
-      var hasBattery = batteryIndicator.isReady && BatteryService.hasAnyBattery();
+      var hasBattery = batteryIndicator.isReady;
       var hasKeyboard = keyboardLayout.currentLayout !== "Unknown";
+      var hasCaps = LockKeysService.capsLockOn;
+      var hasCapsSlot = hasBattery || hasKeyboard || hasCaps;
 
-      if (hasBattery && hasKeyboard) {
+      var visibleCount = 0;
+      if (hasBattery)
+        visibleCount++;
+      if (hasKeyboard)
+        visibleCount++;
+      if (hasCapsSlot)
+        visibleCount++;
+
+      if (visibleCount >= 3) {
+        return 280;
+      } else if (visibleCount === 2) {
         return 200;
-      } else if (hasBattery || hasKeyboard) {
+      } else if (visibleCount === 1) {
         return 120;
       } else {
         return 0;
@@ -127,19 +146,20 @@ Item {
     topLeftRadius: Style.radiusL
     topRightRadius: Style.radiusL
     color: Color.mSurface
-    visible: Settings.data.general.compactLockScreen && ((batteryIndicator.isReady && BatteryService.hasAnyBattery()) || keyboardLayout.currentLayout !== "Unknown")
+    visible: Settings.data.general.compactLockScreen && (batteryIndicator.isReady || keyboardLayout.currentLayout !== "Unknown" || LockKeysService.capsLockOn)
 
     RowLayout {
+      id: compactStatusRow
       anchors.centerIn: parent
       spacing: Style.marginL
 
       // Battery indicator
       RowLayout {
         spacing: Style.marginS
-        visible: batteryIndicator.isReady && BatteryService.hasAnyBattery()
+        visible: batteryIndicator.isReady
 
         NIcon {
-          icon: BatteryService.getIcon(Math.round(batteryIndicator.percent), batteryIndicator.charging, batteryIndicator.pluggedIn, batteryIndicator.isReady)
+          icon: batteryIndicator.icon
           pointSize: Style.fontSizeM
           color: batteryIndicator.charging ? Color.mPrimary : Color.mOnSurfaceVariant
         }
@@ -169,6 +189,25 @@ Item {
           elide: Text.ElideRight
         }
       }
+
+      // Caps Lock indicator
+      RowLayout {
+        spacing: 6
+        visible: batteryIndicator.isReady || keyboardLayout.currentLayout !== "Unknown" || LockKeysService.capsLockOn
+
+        NIcon {
+          icon: "lock"
+          pointSize: Style.fontSizeM
+          color: LockKeysService.capsLockOn ? Color.mPrimary : Qt.alpha(Color.mOnSurfaceVariant, 0.5)
+        }
+
+        NText {
+          text: I18n.tr("bar.lock-keys.show-caps-lock-label")
+          color: LockKeysService.capsLockOn ? Color.mOnSurfaceVariant : Qt.alpha(Color.mOnSurfaceVariant, 0.65)
+          pointSize: Style.fontSizeM
+          elide: Text.ElideRight
+        }
+      }
     }
   }
 
@@ -192,7 +231,7 @@ Item {
     radius: Style.radiusL
     color: Color.mSurface
 
-    width: Settings.data.general.showHibernateOnLockScreen ? 800 : 750
+    width: Settings.data.general.showHibernateOnLockScreen ? 860 : 810
 
     ColumnLayout {
       anchors.fill: parent
@@ -229,9 +268,10 @@ Item {
             z: 0
             sourceComponent: NLinearSpectrum {
               anchors.fill: parent
-              values: CavaService.values
+              values: SpectrumService.values
               fillColor: Color.mPrimary
               opacity: 0.4
+              mirrored: Settings.data.audio.spectrumMirrored
             }
           }
 
@@ -242,9 +282,10 @@ Item {
             z: 0
             sourceComponent: NMirroredSpectrum {
               anchors.fill: parent
-              values: CavaService.values
+              values: SpectrumService.values
               fillColor: Color.mPrimary
               opacity: 0.4
+              mirrored: Settings.data.audio.spectrumMirrored
             }
           }
 
@@ -255,9 +296,10 @@ Item {
             z: 0
             sourceComponent: NWaveSpectrum {
               anchors.fill: parent
-              values: CavaService.values
+              values: SpectrumService.values
               fillColor: Color.mPrimary
               opacity: 0.4
+              mirrored: Settings.data.audio.spectrumMirrored
             }
           }
 
@@ -306,6 +348,124 @@ Item {
                 elide: Text.ElideRight
               }
             }
+
+            // Media controls (when enabled)
+            RowLayout {
+              spacing: Style.marginXS
+              visible: Settings.data.general.enableLockScreenMediaControls
+              Layout.alignment: Qt.AlignHCenter
+
+              Rectangle {
+                width: 28
+                height: 28
+                radius: Math.min(Style.radiusL, width / 2)
+                color: prevButtonArea.containsMouse ? Color.mPrimary : Qt.alpha(Color.mOnSurface, 0.1)
+                visible: MediaService.canGoPrevious
+
+                NIcon {
+                  anchors.centerIn: parent
+                  icon: "media-prev"
+                  pointSize: Style.fontSizeM
+                  color: prevButtonArea.containsMouse ? Color.mOnPrimary : Color.mOnSurface
+
+                  Behavior on color {
+                    ColorAnimation {
+                      duration: Style.animationFast
+                      easing.type: Easing.OutCubic
+                    }
+                  }
+                }
+
+                MouseArea {
+                  id: prevButtonArea
+                  anchors.fill: parent
+                  hoverEnabled: true
+                  cursorShape: Qt.PointingHandCursor
+                  onClicked: MediaService.canGoPrevious ? MediaService.previous() : {}
+                }
+
+                Behavior on color {
+                  ColorAnimation {
+                    duration: Style.animationFast
+                    easing.type: Easing.OutCubic
+                  }
+                }
+              }
+
+              Rectangle {
+                width: 32
+                height: 32
+                radius: Math.min(Style.radiusL, width / 2)
+                color: playPauseButtonArea.containsMouse ? Color.mPrimary : Qt.alpha(Color.mOnSurface, 0.15)
+                visible: MediaService.canPlay || MediaService.canPause
+
+                NIcon {
+                  anchors.centerIn: parent
+                  icon: MediaService.isPlaying ? "media-pause" : "media-play"
+                  pointSize: Style.fontSizeL
+                  color: playPauseButtonArea.containsMouse ? Color.mOnPrimary : Color.mOnSurface
+
+                  Behavior on color {
+                    ColorAnimation {
+                      duration: Style.animationFast
+                      easing.type: Easing.OutCubic
+                    }
+                  }
+                }
+
+                MouseArea {
+                  id: playPauseButtonArea
+                  anchors.fill: parent
+                  hoverEnabled: true
+                  cursorShape: Qt.PointingHandCursor
+                  onClicked: (MediaService.canPlay || MediaService.canPause) ? MediaService.playPause() : {}
+                }
+
+                Behavior on color {
+                  ColorAnimation {
+                    duration: Style.animationFast
+                    easing.type: Easing.OutCubic
+                  }
+                }
+              }
+
+              Rectangle {
+                width: 28
+                height: 28
+                radius: Math.min(Style.radiusL, width / 2)
+                color: nextButtonArea.containsMouse ? Color.mPrimary : Qt.alpha(Color.mOnSurface, 0.1)
+                visible: MediaService.canGoNext
+
+                NIcon {
+                  anchors.centerIn: parent
+                  icon: "media-next"
+                  pointSize: Style.fontSizeM
+                  color: nextButtonArea.containsMouse ? Color.mOnPrimary : Color.mOnSurface
+
+                  Behavior on color {
+                    ColorAnimation {
+                      duration: Style.animationFast
+                      easing.type: Easing.OutCubic
+                    }
+                  }
+                }
+
+                MouseArea {
+                  id: nextButtonArea
+                  anchors.fill: parent
+                  hoverEnabled: true
+                  cursorShape: Qt.PointingHandCursor
+                  onClicked: MediaService.canGoNext ? MediaService.next() : {}
+                }
+
+                Behavior on color {
+                  ColorAnimation {
+                    duration: Style.animationFast
+                    easing.type: Easing.OutCubic
+                  }
+                }
+              }
+            }
           }
         }
 
@@ -328,11 +488,34 @@ Item {
           Layout.preferredWidth: 180
           spacing: Style.marginM
 
-          NIcon {
+          Item {
+            Layout.preferredWidth: lockMainWeatherIconSide
+            Layout.preferredHeight: lockMainWeatherIconSide
             Layout.alignment: Qt.AlignVCenter
-            icon: weatherReady ? LocationService.weatherSymbolFromCode(LocationService.data.weather.current_weather.weathercode, LocationService.data.weather.current_weather.is_day) : "weather-cloud-off"
-            pointSize: Style.fontSizeXXXL
-            color: Color.mPrimary
+            readonly property int lockMainWeatherIconSide: Math.round(Style.fontSizeXXXL * Style.uiScaleRatio * 1.6)
+
+            NIcon {
+              visible: !LocationService.taliaWeatherMascotActive || !weatherReady
+              anchors.centerIn: parent
+              icon: weatherReady ? LocationService.weatherSymbolFromCode(LocationService.data.weather.current_weather.weathercode) : "weather-cloud-off"
+              pointSize: Style.fontSizeXXXL
+              color: Color.mPrimary
+            }
+            Loader {
+              active: LocationService.taliaWeatherMascotActive && weatherReady
+              anchors.fill: parent
+              asynchronous: true
+              sourceComponent: Component {
+                Image {
+                  anchors.fill: parent
+                  fillMode: Image.PreserveAspectFit
+                  smooth: true
+                  mipmap: true
+                  asynchronous: true
+                  source: Qt.resolvedUrl(LocationService.taliaWeatherImageFromCode(LocationService.data.weather.current_weather.weathercode))
+                }
+              }
+            }
           }
 
           ColumnLayout {
@@ -419,11 +602,34 @@ Item {
                 Layout.fillWidth: true
               }
 
-              NIcon {
+              Item {
+                Layout.preferredWidth: lockForecastWeatherIconSide
+                Layout.preferredHeight: lockForecastWeatherIconSide
                 Layout.alignment: Qt.AlignHCenter
-                icon: LocationService.weatherSymbolFromCode(LocationService.data.weather.daily.weathercode[index])
-                pointSize: Style.fontSizeXL
-                color: Color.mOnSurfaceVariant
+                readonly property int lockForecastWeatherIconSide: Math.round(Style.fontSizeXL * Style.uiScaleRatio * 1.6)
+
+                NIcon {
+                  visible: !LocationService.taliaWeatherMascotActive
+                  anchors.centerIn: parent
+                  icon: LocationService.weatherSymbolFromCode(LocationService.data.weather.daily.weathercode[index])
+                  pointSize: Style.fontSizeXL
+                  color: Color.mOnSurfaceVariant
+                }
+                Loader {
+                  active: LocationService.taliaWeatherMascotActive
+                  anchors.fill: parent
+                  asynchronous: true
+                  sourceComponent: Component {
+                    Image {
+                      anchors.fill: parent
+                      fillMode: Image.PreserveAspectFit
+                      smooth: true
+                      mipmap: true
+                      asynchronous: true
+                      source: Qt.resolvedUrl(LocationService.taliaWeatherImageFromCode(LocationService.data.weather.daily.weathercode[index]))
+                    }
+                  }
+                }
               }
 
               NText {
@@ -449,22 +655,22 @@ Item {
         }
 
         Item {
-          Layout.fillWidth: batteryIndicator.isReady && BatteryService.hasAnyBattery()
+          Layout.fillWidth: batteryIndicator.isReady
         }
 
         // Battery and Keyboard Layout (full mode only)
         ColumnLayout {
-          Layout.alignment: (batteryIndicator.isReady && BatteryService.hasAnyBattery()) ? (Qt.AlignRight | Qt.AlignVCenter) : Qt.AlignVCenter
+          Layout.alignment: (batteryIndicator.isReady) ? (Qt.AlignRight | Qt.AlignVCenter) : Qt.AlignVCenter
           spacing: Style.marginM
-          visible: (batteryIndicator.isReady && BatteryService.hasAnyBattery()) || keyboardLayout.currentLayout !== "Unknown"
+          visible: batteryIndicator.isReady || keyboardLayout.currentLayout !== "Unknown" || LockKeysService.capsLockOn
 
           // Battery
           RowLayout {
             spacing: Style.marginXS
-            visible: batteryIndicator.isReady && BatteryService.hasAnyBattery()
+            visible: batteryIndicator.isReady
 
             NIcon {
-              icon: BatteryService.getIcon(Math.round(batteryIndicator.percent), batteryIndicator.charging, batteryIndicator.pluggedIn, batteryIndicator.isReady)
+              icon: batteryIndicator.icon
               pointSize: Style.fontSizeM
               color: batteryIndicator.charging ? Color.mPrimary : Color.mOnSurfaceVariant
             }
@@ -490,6 +696,25 @@ Item {
             NText {
               text: keyboardLayout.currentLayout
               color: Color.mOnSurfaceVariant
+              pointSize: Style.fontSizeM
+              elide: Text.ElideRight
+            }
+          }
+
+          // Caps Lock
+          RowLayout {
+            spacing: Style.marginXS
+            visible: batteryIndicator.isReady || keyboardLayout.currentLayout !== "Unknown" || LockKeysService.capsLockOn
+
+            NIcon {
+              icon: "lock"
+              pointSize: Style.fontSizeM
+              color: LockKeysService.capsLockOn ? Color.mPrimary : Qt.alpha(Color.mOnSurfaceVariant, 0.5)
+            }
+
+            NText {
+              text: I18n.tr("bar.lock-keys.show-caps-lock-label")
+              color: LockKeysService.capsLockOn ? Color.mOnSurfaceVariant : Qt.alpha(Color.mOnSurfaceVariant, 0.65)
               pointSize: Style.fontSizeM
               elide: Text.ElideRight
             }
@@ -521,6 +746,20 @@ Item {
 
           property bool passwordVisible: false
 
+          // Ctrl + A to highlight the portion
+          Shortcut {
+            sequence: StandardKey.SelectAll
+            enabled: passwordInput.activeFocus
+            onActivated: passwordInput.selectAll()
+          }
+
+          // Esc to clear selection
+          Shortcut {
+            sequences: [StandardKey.Cancel]
+            enabled: passwordInput.activeFocus && passwordInput.selectionStart !== passwordInput.selectionEnd
+            onActivated: passwordInput.deselect()
+          }
+
           Row {
             anchors.left: parent.left
             anchors.leftMargin: 18
@@ -528,7 +767,7 @@ Item {
             spacing: Style.marginL
 
             NIcon {
-              icon: "lock"
+              icon: "login-2"
               pointSize: Style.fontSizeL
               color: passwordInput.activeFocus ? Color.mPrimary : Color.mOnSurfaceVariant
               anchors.verticalCenter: parent.verticalCenter
@@ -544,9 +783,10 @@ Item {
                 visible: passwordInput.activeFocus && passwordInput.text.length === 0
                 anchors.verticalCenter: parent.verticalCenter
 
+                // Smooth fade animation (when animations enabled)
                 SequentialAnimation on opacity {
                   loops: Animation.Infinite
-                  running: passwordInput.activeFocus && passwordInput.text.length === 0
+                  running: root.animationsEnabled && passwordInput.activeFocus && passwordInput.text.length === 0
                   NumberAnimation {
                     to: 0
                     duration: 530
@@ -556,61 +796,206 @@ Item {
                     duration: 530
                   }
                 }
+
+                // Simple toggle (when animations disabled) — no per-frame repaints
+                Timer {
+                  interval: 530
+                  running: !root.animationsEnabled && passwordInput.activeFocus && passwordInput.text.length === 0
+                  repeat: true
+                  onTriggered: parent.opacity = parent.opacity > 0.5 ? 0 : 1
+                }
               }
 
-              // Password display - show dots or actual text based on passwordVisible
+              // Host for dots / plain text and the caret (caret x follows passwordInput.cursorPosition)
               Item {
-                width: Math.min(passwordDisplayContent.width, 550)
+                id: passwordVisualHost
                 height: 20
-                visible: passwordInput.text.length > 0 && !parent.parent.parent.passwordVisible
+                width: passwordInputContainer.passwordVisible ? Math.min(visiblePasswordPlainText.implicitWidth, 550) : Math.min(passwordDisplayContent.width, 550)
                 anchors.verticalCenter: parent.verticalCenter
-                clip: true
 
-                Row {
-                  id: passwordDisplayContent
-                  spacing: Style.marginS
+                readonly property real caretVisualX: {
+                  const len = passwordInput.text.length;
+                  if (len <= 0)
+                    return 0;
+                  if (passwordInputContainer.passwordVisible) {
+                    const adv = passwordCaretFontMetrics.advanceWidth(passwordInput.text.substring(0, passwordInput.cursorPosition));
+                    return Math.max(0, Math.min(adv, width));
+                  }
+                  const w = passwordDisplayContent.width;
+                  if (w <= 0)
+                    return 0;
+                  return Math.max(0, Math.min((passwordInput.cursorPosition / len) * w, width));
+                }
+
+                // Password dots display with selection support
+                Item {
+                  width: Math.min(passwordDisplayContent.width, 550)
+                  height: 20
+                  visible: passwordInput.text.length > 0 && !passwordInputContainer.passwordVisible
+                  anchors.left: parent.left
                   anchors.verticalCenter: parent.verticalCenter
+                  clip: true
 
-                  Repeater {
-                    model: passwordInput.text.length
+                  // Proportional selection highlight behind the dots
+                  Rectangle {
+                    id: selectionHighlight
+                    visible: passwordInput.selectionStart !== passwordInput.selectionEnd && passwordInput.text.length > 0
+                    color: Qt.alpha(Color.mPrimary, 0.8)
+                    height: parent.height + Style.marginS
+                    anchors.verticalCenter: parent.verticalCenter
+                    x: (passwordInput.selectionStart / passwordInput.text.length) * passwordDisplayContent.width
+                    width: ((passwordInput.selectionEnd - passwordInput.selectionStart) / passwordInput.text.length) * passwordDisplayContent.width
+                  }
 
-                    NIcon {
-                      icon: "circle-filled"
-                      pointSize: Style.fontSizeS
-                      color: Color.mPrimary
-                      opacity: 1.0
+                  Row {
+                    id: passwordDisplayContent
+                    spacing: Style.marginXXXS
+                    anchors.verticalCenter: parent.verticalCenter
+
+                    Repeater {
+                      id: iconRepeater
+                      model: ScriptModel {
+                        values: Array(passwordInput.text.length)
+                      }
+
+                      property list<string> passwordChars: ["circle-filled", "pentagon-filled", "michelin-star-filled", "square-rounded-filled", "guitar-pick-filled", "blob-filled", "triangle-filled"]
+
+                      NIcon {
+                        id: icon
+
+                        required property int index
+                        // This will be called with index = -1 when the TextInput is deleted
+                        // So we make sur index is positive to avoid warning on array accesses
+                        property bool drawCustomChar: index >= 0 && Settings.data.general.passwordChars
+                        // Flip color when this dot falls inside the active selection range
+                        property bool isSelected: index >= 0 && passwordInput.selectionStart !== passwordInput.selectionEnd && index >= passwordInput.selectionStart && index < passwordInput.selectionEnd
+
+                        icon: drawCustomChar ? iconRepeater.passwordChars[index % iconRepeater.passwordChars.length] : "circle-filled"
+                        pointSize: Style.fontSizeL
+                        color: isSelected ? Color.mOnPrimary : Color.mPrimary
+                        opacity: 1.0
+                        scale: animationsEnabled ? 0.5 : 1
+                        ParallelAnimation {
+                          id: iconAnim
+                          NumberAnimation {
+                            target: icon
+                            properties: "scale"
+                            to: 1
+                            duration: Style.animationFast
+                            easing.type: Easing.BezierSpline
+                            easing.bezierCurve: Easing.OutInBounce
+                          }
+                        }
+                        Component.onCompleted: {
+                          if (animationsEnabled) {
+                            iconAnim.start();
+                          }
+                        }
+                      }
+                    }
+                  }
+
+                  // Mouse area for click-to-position and drag-to-select
+                  MouseArea {
+                    anchors.fill: parent
+                    cursorShape: Qt.IBeamCursor
+
+                    property int dragStartPos: 0
+                    property bool pendingSelectAll: false
+
+                    // Resets double-click state if user pauses too long between clicks
+                    Timer {
+                      id: doubleClickResetTimer
+                      interval: 600
+                      onTriggered: parent.pendingSelectAll = false
+                    }
+
+                    function charIndexFromX(mouseX) {
+                      if (passwordInput.text.length === 0)
+                        return 0;
+                      var charWidth = passwordDisplayContent.width / passwordInput.text.length;
+                      // floor so clicking anywhere on a dot selects that dot, not the next
+                      return Math.max(0, Math.min(passwordInput.text.length - 1, Math.floor(mouseX / charWidth)));
+                    }
+
+                    onPressed: function (mouse) {
+                      doubleClickResetTimer.stop();
+                      passwordInput.forceActiveFocus();
+                      dragStartPos = charIndexFromX(mouse.x);
+                      passwordInput.cursorPosition = dragStartPos;
+                    }
+
+                    onPositionChanged: function (mouse) {
+                      pendingSelectAll = false;
+                      var curPos = charIndexFromX(mouse.x);
+                      if (curPos <= dragStartPos) {
+                        passwordInput.select(curPos, dragStartPos + 1);
+                      } else {
+                        passwordInput.select(dragStartPos, curPos + 1);
+                      }
+                    }
+
+                    onDoubleClicked: function (mouse) {
+                      passwordInput.forceActiveFocus();
+                      if (pendingSelectAll) {
+                        passwordInput.selectAll();
+                        pendingSelectAll = false;
+                      } else {
+                        var pos = charIndexFromX(mouse.x);
+                        passwordInput.select(pos, Math.min(pos + 1, passwordInput.text.length));
+                        pendingSelectAll = true;
+                        doubleClickResetTimer.restart();
+                      }
                     }
                   }
                 }
-              }
 
-              NText {
-                text: passwordInput.text
-                color: Color.mPrimary
-                pointSize: Style.fontSizeM
-                visible: passwordInput.text.length > 0 && parent.parent.parent.passwordVisible
-                anchors.verticalCenter: parent.verticalCenter
-                elide: Text.ElideRight
-                width: Math.min(implicitWidth, 550)
-              }
+                NText {
+                  id: visiblePasswordPlainText
+                  text: passwordInput.text
+                  color: Color.mPrimary
+                  pointSize: Style.fontSizeM
+                  visible: passwordInput.text.length > 0 && passwordInputContainer.passwordVisible
+                  anchors.left: parent.left
+                  anchors.verticalCenter: parent.verticalCenter
+                  elide: Text.ElideRight
+                  width: Math.min(implicitWidth, 550)
+                }
 
-              Rectangle {
-                width: 2
-                height: 20
-                color: Color.mPrimary
-                visible: passwordInput.activeFocus && passwordInput.text.length > 0
-                anchors.verticalCenter: parent.verticalCenter
+                FontMetrics {
+                  id: passwordCaretFontMetrics
+                  font: visiblePasswordPlainText.font
+                }
 
-                SequentialAnimation on opacity {
-                  loops: Animation.Infinite
-                  running: passwordInput.activeFocus && passwordInput.text.length > 0
-                  NumberAnimation {
-                    to: 0
-                    duration: 530
+                Rectangle {
+                  width: 2
+                  height: 20
+                  x: passwordVisualHost.caretVisualX
+                  color: Color.mPrimary
+                  // Hide the cursor when text is selected
+                  visible: passwordInput.activeFocus && passwordInput.text.length > 0 && passwordInput.selectionStart === passwordInput.selectionEnd
+                  anchors.verticalCenter: parent.verticalCenter
+
+                  // Smooth fade animation (when animations enabled)
+                  SequentialAnimation on opacity {
+                    loops: Animation.Infinite
+                    running: root.animationsEnabled && passwordInput.activeFocus && passwordInput.text.length > 0 && passwordInput.selectionStart === passwordInput.selectionEnd
+                    NumberAnimation {
+                      to: 0
+                      duration: 530
+                    }
+                    NumberAnimation {
+                      to: 1
+                      duration: 530
+                    }
                   }
-                  NumberAnimation {
-                    to: 1
-                    duration: 530
+
+                  // Simple toggle (when animations disabled) — no per-frame repaints
+                  Timer {
+                    interval: 530
+                    running: !root.animationsEnabled && passwordInput.activeFocus && passwordInput.text.length > 0 && passwordInput.selectionStart === passwordInput.selectionEnd
+                    repeat: true
+                    onTriggered: parent.opacity = parent.opacity > 0.5 ? 0 : 1
                   }
                 }
               }
@@ -741,7 +1126,6 @@ Item {
             outlined: true
             backgroundColor: Color.mOnSurfaceVariant
             textColor: Color.mOnPrimary
-            hoverColor: Color.mPrimary
             fontSize: Settings.data.general.compactLockScreen ? Style.fontSizeS : Style.fontSizeM
             iconSize: Settings.data.general.compactLockScreen ? Style.fontSizeM : Style.fontSizeL
             horizontalAlignment: Qt.AlignHCenter
@@ -761,7 +1145,6 @@ Item {
             outlined: true
             backgroundColor: Color.mOnSurfaceVariant
             textColor: Color.mOnPrimary
-            hoverColor: Color.mPrimary
             fontSize: Settings.data.general.compactLockScreen ? Style.fontSizeS : Style.fontSizeM
             iconSize: Settings.data.general.compactLockScreen ? Style.fontSizeM : Style.fontSizeL
             horizontalAlignment: Qt.AlignHCenter
@@ -782,7 +1165,6 @@ Item {
             outlined: true
             backgroundColor: Color.mOnSurfaceVariant
             textColor: Color.mOnPrimary
-            hoverColor: Color.mPrimary
             fontSize: Settings.data.general.compactLockScreen ? Style.fontSizeS : Style.fontSizeM
             iconSize: Settings.data.general.compactLockScreen ? Style.fontSizeM : Style.fontSizeL
             horizontalAlignment: Qt.AlignHCenter
@@ -802,7 +1184,6 @@ Item {
             outlined: true
             backgroundColor: Color.mOnSurfaceVariant
             textColor: Color.mOnPrimary
-            hoverColor: Color.mPrimary
             fontSize: Settings.data.general.compactLockScreen ? Style.fontSizeS : Style.fontSizeM
             iconSize: Settings.data.general.compactLockScreen ? Style.fontSizeM : Style.fontSizeL
             horizontalAlignment: Qt.AlignHCenter
@@ -822,7 +1203,6 @@ Item {
             outlined: true
             backgroundColor: Color.mError
             textColor: Color.mOnError
-            hoverColor: Color.mError
             fontSize: Settings.data.general.compactLockScreen ? Style.fontSizeS : Style.fontSizeM
             iconSize: Settings.data.general.compactLockScreen ? Style.fontSizeM : Style.fontSizeL
             horizontalAlignment: Qt.AlignHCenter

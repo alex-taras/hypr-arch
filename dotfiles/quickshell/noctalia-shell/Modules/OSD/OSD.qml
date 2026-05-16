@@ -35,6 +35,7 @@ Variants {
     property int currentOSDType: -1 // OSD.Type enum value, -1 means none
     property bool startupComplete: false
     property real currentBrightness: 0
+    property bool suppressInputOSD: false
 
     // Lock Key States
     property string lastLockKeyChanged: ""  // "caps", "num", "scroll", or ""
@@ -177,11 +178,20 @@ Variants {
     }
 
     function onBrightnessChanged(newBrightness) {
+      if (!root)
+        return;
+
       root.currentBrightness = newBrightness;
       // Don't show OSD if brightness panel is open
       var brightnessPanel = PanelService.getPanel("brightnessPanel", root.modelData);
-      if (brightnessPanel && brightnessPanel.isPanelOpen) {
+      var controlCenterPanel = PanelService.getPanel("controlCenterPanel", root.modelData);
+
+      if (brightnessPanel && brightnessPanel.isPanelOpen)
         return;
+      if (controlCenterPanel && controlCenterPanel.isPanelOpen) {
+        var cards = Settings.data.controlCenter.cards || [];
+        if (cards.some(c => c.enabled && c.id === "brightness-card"))
+          return;
       }
       showOSD(OSD.Type.Brightness);
     }
@@ -204,6 +214,19 @@ Variants {
       // Check if this OSD type is enabled
       if (!isTypeEnabled(type))
         return;
+
+      // Suppress Audio OSD if Audio Panel or Control Center (with audio card) is open
+      if (type === OSD.Type.Volume || type === OSD.Type.InputVolume) {
+        var audioPanel = PanelService.getPanel("audioPanel", root.modelData);
+        if (audioPanel && audioPanel.isPanelOpen)
+          return;
+        var controlCenterPanel = PanelService.getPanel("controlCenterPanel", root.modelData);
+        if (controlCenterPanel && controlCenterPanel.isPanelOpen) {
+          var cards = Settings.data.controlCenter.cards || [];
+          if (cards.some(c => c.enabled && c.id === "audio-card"))
+            return;
+        }
+      }
 
       currentOSDType = type;
 
@@ -237,6 +260,14 @@ Variants {
         showOSD(OSD.Type.Volume);
       }
 
+      function onVolumeAtMaximum() {
+        showOSD(OSD.Type.Volume);
+      }
+
+      function onVolumeAtMinimum() {
+        showOSD(OSD.Type.Volume);
+      }
+
       function onMutedChanged() {
         if (AudioService.consumeOutputOSDSuppression())
           return;
@@ -244,11 +275,15 @@ Variants {
       }
 
       function onInputVolumeChanged() {
+        if (suppressInputOSD)
+          return;
         if (AudioService.hasInput)
           showOSD(OSD.Type.InputVolume);
       }
 
       function onInputMutedChanged() {
+        if (suppressInputOSD)
+          return;
         if (!AudioService.hasInput)
           return;
         if (AudioService.consumeInputOSDSuppression())
@@ -258,6 +293,8 @@ Variants {
 
       // Refresh OSD when device changes to ensure correct volume is displayed
       function onSinkChanged() {
+        suppressInputOSD = true;
+        inputSuppressionTimer.restart();
         // If volume OSD is currently showing, refresh it to show new device's volume
         if (root.currentOSDType === OSD.Type.Volume) {
           Qt.callLater(() => {
@@ -281,6 +318,20 @@ Variants {
       target: BrightnessService
       function onMonitorsChanged() {
         connectBrightnessMonitors();
+      }
+    }
+
+    // Register/unregister LockKeysService polling based on whether LockKey OSD is enabled
+    onLockKeyOSDEnabledChanged: {
+      if (lockKeyOSDEnabled) {
+        LockKeysService.registerComponent("osd:" + (modelData?.name || "unknown"));
+      } else {
+        LockKeysService.unregisterComponent("osd:" + (modelData?.name || "unknown"));
+      }
+    }
+    Component.onCompleted: {
+      if (lockKeyOSDEnabled) {
+        LockKeysService.registerComponent("osd:" + (modelData?.name || "unknown"));
       }
     }
 
@@ -313,6 +364,27 @@ Variants {
       onTriggered: {
         connectBrightnessMonitors();
         root.startupComplete = true;
+      }
+    }
+
+    // Timer to reset the input volume OSD suppression
+    Timer {
+      id: inputSuppressionTimer
+      interval: 300
+      repeat: false
+      onTriggered: root.suppressInputOSD = false
+    }
+
+    Component.onDestruction: {
+      LockKeysService.unregisterComponent("osd:" + (modelData?.name || "unknown"));
+      if (typeof BrightnessService !== "undefined" && BrightnessService.monitors) {
+        for (var i = 0; i < BrightnessService.monitors.length; i++) {
+          try {
+            BrightnessService.monitors[i].brightnessUpdated.disconnect(onBrightnessChanged);
+          } catch (e) {
+            // Ignore errors if already disconnected or not connected
+          }
+        }
       }
     }
 
@@ -366,15 +438,15 @@ Variants {
           const fontSize = Style.fontSizeS * Settings.data.ui.fontFixedScale * Style.uiScaleRatio;
           const estimatedWidth = text.length * fontSize * 0.6;
           const iconWidth = Style.fontSizeXL * Style.uiScaleRatio;
-          const margins = Style.marginL * 2;
+          const margins = Style.margin2L;
           const spacing = Style.marginM;
-          const bgMargins = Style.marginM * 1.5 * 2;
+          const bgMargins = Style.margin2M * 1.5;
           return Math.max(shortHWidth, Math.round((estimatedWidth + iconWidth + margins + spacing + bgMargins) * 1.1));
         }
         const iconWidth = Style.fontSizeXL * Style.uiScaleRatio;
-        const margins = Style.marginL * 2; // Left and right content margins
+        const margins = Style.margin2L; // Left and right content margins
         const spacing = Style.marginM; // Spacing between icon and text
-        const bgMargins = Style.marginM * 1.5 * 2; // Background margins
+        const bgMargins = Style.margin2M * 1.5; // Background margins
         const totalWidth = textWidth + iconWidth + margins + spacing + bgMargins;
         // Ensure minimum width and add some buffer
         return Math.max(shortHWidth, Math.round(totalWidth * 1.1));
@@ -397,8 +469,8 @@ Variants {
         const textHeight = charCount * charHeight;
         // Background margins (Style.marginM * 1.5 * 2 for top and bottom)
         const bgMargins = Style.marginM * 1.5 * 2;
-        // Content margins (Style.marginL * 2 for top and bottom)
-        const contentMargins = Style.marginL * 2;
+        // Content margins (Style.margin2L for top and bottom)
+        const contentMargins = Style.margin2L;
         // Icon size: fontSizeXL scaled, with extra space for icon rendering and padding
         const iconSize = Style.fontSizeXL * Style.uiScaleRatio * 1.8; // Add 80% for icon rendering and padding
         // Spacing between text and icon (Style.marginM for lock keys)
@@ -432,7 +504,7 @@ Variants {
         let base = Style.marginM;
         if (screenBarPosition === position) {
           const isVertical = position === "top" || position === "bottom";
-          const floatExtra = Math.ceil(Settings.data.bar.floating ? (isVertical ? Settings.data.bar.marginVertical : Settings.data.bar.marginHorizontal) : 0);
+          const floatExtra = Math.ceil(Settings.data.bar.barType === "floating" ? (isVertical ? Settings.data.bar.marginVertical : Settings.data.bar.marginHorizontal) : 0);
           return barHeight + base + floatExtra;
         }
 
@@ -456,6 +528,9 @@ Variants {
       WlrLayershell.keyboardFocus: WlrKeyboardFocus.None
       WlrLayershell.layer: Settings.data.osd?.overlayLayer ? WlrLayer.Overlay : WlrLayer.Top
       WlrLayershell.exclusionMode: ExclusionMode.Ignore
+
+      // Click-through — OSD is display-only, no input needed
+      mask: Region {}
 
       Item {
         id: osdItem
@@ -500,8 +575,8 @@ Variants {
           anchors.fill: parent
           anchors.margins: Style.marginM * 1.5
           radius: Style.radiusL
-          color: Qt.alpha(Color.mSurface, Settings.data.osd.backgroundOpacity || 1.0)
-          border.color: Qt.alpha(Color.mOutline, Settings.data.osd.backgroundOpacity || 1.0)
+          color: Qt.alpha(Color.mSurface, Color.adaptiveOpacity(Settings.data.osd.backgroundOpacity) || 1.0)
+          border.color: Qt.alpha(Color.mOutline, Color.adaptiveOpacity(Settings.data.osd.backgroundOpacity) || 1.0)
           border.width: {
             const bw = Math.max(2, Style.borderM);
             return bw % 2 === 0 ? bw : bw + 1;

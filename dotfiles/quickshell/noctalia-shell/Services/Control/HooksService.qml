@@ -55,6 +55,7 @@ Singleton {
         root.pendingWallpaperHook = null;
         executeWallpaperHook(hook.path, hook.screenName);
       }
+      executeColorGenerationHook();
     }
   }
 
@@ -118,8 +119,10 @@ Singleton {
     }
 
     try {
+      const theme = Settings.data.colorSchemes.darkMode ? "dark" : "light";
       let command = script.replace(/\$1/g, wallpaperPath);
       command = command.replace(/\$2/g, screenName || "");
+      command = command.replace(/\$3/g, theme);
       Quickshell.execDetached(["sh", "-lc", command]);
       Logger.d("HooksService", `Executed wallpaper hook: ${command}`);
     } catch (e) {
@@ -159,7 +162,8 @@ Singleton {
     }
 
     try {
-      Quickshell.execDetached(["sh", "-lc", script]);
+      // Pass "lock" as $1 via shell arguments so the script receives it
+      Quickshell.execDetached(["sh", "-lc", script, "lock-hook", "lock"]);
       Logger.d("HooksService", `Executed screen lock hook: ${script}`);
     } catch (e) {
       Logger.e("HooksService", `Failed to execute screen lock hook: ${e}`);
@@ -178,7 +182,8 @@ Singleton {
     }
 
     try {
-      Quickshell.execDetached(["sh", "-lc", script]);
+      // Pass "unlock" as $1 via shell arguments so the script receives it
+      Quickshell.execDetached(["sh", "-lc", script, "unlock-hook", "unlock"]);
       Logger.d("HooksService", `Executed screen unlock hook: ${script}`);
     } catch (e) {
       Logger.e("HooksService", `Failed to execute screen unlock hook: ${e}`);
@@ -221,6 +226,27 @@ Singleton {
     }
   }
 
+  // Execute color generation hook
+  function executeColorGenerationHook() {
+    if (!Settings.data.hooks?.enabled) {
+      return;
+    }
+
+    const script = Settings.data.hooks?.colorGeneration;
+    if (!script || script === "") {
+      return;
+    }
+
+    try {
+      const theme = Settings.data.colorSchemes.darkMode ? "dark" : "light";
+      const command = script.replace(/\$1/g, theme);
+      Quickshell.execDetached(["sh", "-lc", command]);
+      Logger.d("HooksService", `Executed color generation hook: ${command}`);
+    } catch (e) {
+      Logger.e("HooksService", `Failed to execute color generation hook: ${e}`);
+    }
+  }
+
   // Blocking power hook infrastructure
   property var pendingPowerCallback: null
 
@@ -241,7 +267,7 @@ Singleton {
 
   function runPowerHook(script, callback) {
     pendingPowerCallback = callback;
-    powerHookProcess.command = ["sh", "-c", script];
+    powerHookProcess.command = ["sh", "-lc", script];
     powerHookProcess.running = true;
   }
 

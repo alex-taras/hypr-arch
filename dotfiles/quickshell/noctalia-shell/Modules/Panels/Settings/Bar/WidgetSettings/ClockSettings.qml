@@ -11,18 +11,21 @@ ColumnLayout {
   width: 700
 
   // Properties to receive data from parent
+  property var screen: null
   property var widgetData: null
   property var widgetMetadata: null
 
   signal settingsChanged(var settings)
 
   // Local state
-  property bool valueUsePrimaryColor: widgetData.usePrimaryColor !== undefined ? widgetData.usePrimaryColor : widgetMetadata.usePrimaryColor
+  property string valueClockColor: widgetData.clockColor !== undefined ? widgetData.clockColor : widgetMetadata.clockColor
   property bool valueUseCustomFont: widgetData.useCustomFont !== undefined ? widgetData.useCustomFont : widgetMetadata.useCustomFont
-  property string valueCustomFont: widgetData.customFont !== undefined ? widgetData.customFont : (widgetMetadata.customFont !== undefined ? widgetMetadata.customFont : "")
-  property string valueFormatHorizontal: widgetData.formatHorizontal !== undefined ? widgetData.formatHorizontal : (widgetMetadata.formatHorizontal !== undefined ? widgetMetadata.formatHorizontal : "")
-  property string valueFormatVertical: widgetData.formatVertical !== undefined ? widgetData.formatVertical : (widgetMetadata.formatVertical !== undefined ? widgetMetadata.formatVertical : "")
-  property string valueTooltipFormat: widgetData.tooltipFormat !== undefined ? widgetData.tooltipFormat : (widgetMetadata.tooltipFormat !== undefined ? widgetMetadata.tooltipFormat : "")
+  property string valueCustomFont: widgetData.customFont !== undefined ? widgetData.customFont : widgetMetadata.customFont
+  property string valueFormatHorizontal: widgetData.formatHorizontal !== undefined ? widgetData.formatHorizontal : widgetMetadata.formatHorizontal
+  property string valueFormatVertical: widgetData.formatVertical !== undefined ? widgetData.formatVertical : widgetMetadata.formatVertical
+  property string valueTooltipFormat: widgetData.tooltipFormat !== undefined ? widgetData.tooltipFormat : widgetMetadata.tooltipFormat
+
+  readonly property color textColor: Color.resolveColorKey(valueClockColor)
 
   // Track the currently focused input field
   property var focusedInput: null
@@ -32,13 +35,13 @@ ColumnLayout {
 
   function saveSettings() {
     var settings = Object.assign({}, widgetData || {});
-    settings.usePrimaryColor = valueUsePrimaryColor;
+    settings.clockColor = valueClockColor;
     settings.useCustomFont = valueUseCustomFont;
     settings.customFont = valueCustomFont;
     settings.formatHorizontal = valueFormatHorizontal.trim();
     settings.formatVertical = valueFormatVertical.trim();
     settings.tooltipFormat = valueTooltipFormat.trim();
-    return settings;
+    settingsChanged(settings);
   }
 
   // Function to insert token at cursor position in the focused input
@@ -68,15 +71,13 @@ ColumnLayout {
     }
   }
 
-  NToggle {
-    Layout.fillWidth: true
-    label: I18n.tr("bar.clock.use-primary-color-label")
-    description: I18n.tr("bar.clock.use-primary-color-description")
-    checked: valueUsePrimaryColor
-    onToggled: checked => {
-                 valueUsePrimaryColor = checked;
-                 settingsChanged(saveSettings());
-               }
+  NColorChoice {
+    currentKey: valueClockColor
+    onSelected: key => {
+                  valueClockColor = key;
+                  saveSettings();
+                }
+    defaultValue: widgetMetadata.clockColor
   }
 
   NToggle {
@@ -86,8 +87,9 @@ ColumnLayout {
     checked: valueUseCustomFont
     onToggled: checked => {
                  valueUseCustomFont = checked;
-                 settingsChanged(saveSettings());
+                 saveSettings();
                }
+    defaultValue: widgetMetadata.useCustomFont
   }
 
   NSearchableComboBox {
@@ -103,8 +105,9 @@ ColumnLayout {
     minimumWidth: 300
     onSelected: function (key) {
       valueCustomFont = key;
-      settingsChanged(saveSettings());
+      saveSettings();
     }
+    defaultValue: Settings.data.ui.fontDefault
   }
 
   NDivider {
@@ -137,8 +140,10 @@ ColumnLayout {
         description: I18n.tr("bar.clock.horizontal-bar-description")
         placeholderText: "HH:mm ddd, MMM dd"
         text: valueFormatHorizontal
-        onTextChanged: valueFormatHorizontal = text
-        onEditingFinished: settingsChanged(saveSettings())
+        onTextChanged: {
+          valueFormatHorizontal = text;
+          saveSettings();
+        }
         Component.onCompleted: {
           if (inputItem) {
             inputItem.onActiveFocusChanged.connect(function () {
@@ -148,6 +153,7 @@ ColumnLayout {
             });
           }
         }
+        defaultValue: widgetMetadata.formatHorizontal
       }
 
       Item {
@@ -162,8 +168,10 @@ ColumnLayout {
         // Tokens are Qt format tokens and must not be localized
         placeholderText: "HH mm dd MM"
         text: valueFormatVertical
-        onTextChanged: valueFormatVertical = text
-        onEditingFinished: settingsChanged(saveSettings())
+        onTextChanged: {
+          valueFormatVertical = text;
+          saveSettings();
+        }
         Component.onCompleted: {
           if (inputItem) {
             inputItem.onActiveFocusChanged.connect(function () {
@@ -173,6 +181,7 @@ ColumnLayout {
             });
           }
         }
+        defaultValue: widgetMetadata.formatVertical
       }
 
       NTextInput {
@@ -182,8 +191,10 @@ ColumnLayout {
         description: I18n.tr("bar.clock.tooltip-format-description")
         placeholderText: "HH:mm, ddd MMM dd"
         text: valueTooltipFormat
-        onTextChanged: valueTooltipFormat = text
-        onEditingFinished: settingsChanged(saveSettings())
+        onTextChanged: {
+          valueTooltipFormat = text;
+          saveSettings();
+        }
         Component.onCompleted: {
           if (inputItem) {
             inputItem.onActiveFocusChanged.connect(function () {
@@ -193,6 +204,7 @@ ColumnLayout {
             });
           }
         }
+        defaultValue: widgetMetadata.tooltipFormat
       }
     }
 
@@ -240,7 +252,7 @@ ColumnLayout {
                 family: valueUseCustomFont && valueCustomFont ? valueCustomFont : Settings.data.ui.fontDefault
                 pointSize: Style.fontSizeM
                 font.weight: Style.fontWeightBold
-                color: valueUsePrimaryColor ? Color.mPrimary : Color.mOnSurface
+                color: textColor
                 wrapMode: Text.WordWrap
                 Layout.alignment: Qt.AlignHCenter | Qt.AlignVCenter
 
@@ -271,7 +283,7 @@ ColumnLayout {
                 family: valueUseCustomFont && valueCustomFont ? valueCustomFont : Settings.data.ui.fontDefault
                 pointSize: Style.fontSizeM
                 font.weight: Style.fontWeightBold
-                color: valueUsePrimaryColor ? Color.mPrimary : Color.mOnSurface
+                color: textColor
                 wrapMode: Text.WordWrap
                 Layout.alignment: Qt.AlignHCenter | Qt.AlignVCenter
 

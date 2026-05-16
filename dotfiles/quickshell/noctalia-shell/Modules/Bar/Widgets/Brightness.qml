@@ -19,7 +19,7 @@ Item {
   property int sectionWidgetIndex: -1
   property int sectionWidgetsCount: 0
 
-  property var widgetMetadata: BarWidgetRegistry.widgetMetadata[widgetId]
+  property var widgetMetadata: BarWidgetRegistry.widgetMetadata[widgetId] ?? {}
   // Explicit screenName property ensures reactive binding when screen changes
   readonly property string screenName: screen ? screen.name : ""
   property var widgetSettings: {
@@ -35,6 +35,10 @@ Item {
   readonly property string barPosition: Settings.getBarPositionForScreen(screenName)
   readonly property bool isBarVertical: barPosition === "left" || barPosition === "right"
   readonly property string displayMode: (widgetSettings.displayMode !== undefined) ? widgetSettings.displayMode : widgetMetadata.displayMode
+  readonly property string iconColorKey: widgetSettings.iconColor !== undefined ? widgetSettings.iconColor : widgetMetadata.iconColor
+  readonly property string textColorKey: widgetSettings.textColor !== undefined ? widgetSettings.textColor : widgetMetadata.textColor
+  readonly property bool applyToAllMonitors: widgetSettings.applyToAllMonitors !== undefined ? widgetSettings.applyToAllMonitors : (Settings.data.brightness.syncAllMonitors !== undefined ? Settings.data.brightness.syncAllMonitors : widgetMetadata.applyToAllMonitors)
+  readonly property bool reverseScroll: Settings.data.general.reverseScroll
 
   // Used to avoid opening the pill on Quickshell startup
   property bool firstBrightnessReceived: false
@@ -42,23 +46,26 @@ Item {
   implicitWidth: pill.width
   implicitHeight: pill.height
 
-  // Track the brightness monitor reactively; explicitly update on screen/monitors changes
-  property var brightnessMonitor: null
-
-  function updateMonitor() {
-    brightnessMonitor = BrightnessService.getMonitorForScreen(screen) || null;
+  // Track the brightness monitor reactively via declarative binding so it
+  // updates atomically when monitors change, avoiding a transient undefined
+  // state that occurs when Monitor QtObjects are destroyed before the
+  // imperative updateMonitor() call would run.
+  property var brightnessMonitor: {
+    var _ = BrightnessService.monitors; // reactive dependency
+    var __ = BrightnessService.ddcMonitors; // reactive dependency
+    if (!screen)
+      return null;
+    return BrightnessService.getMonitorForScreen(screen) ?? null;
   }
 
-  onScreenChanged: updateMonitor()
-
-  Connections {
-    target: BrightnessService
-    function onMonitorsChanged() {
-      root.updateMonitor();
+  function getControllableMonitorCount() {
+    var monitors = BrightnessService.monitors || [];
+    var count = 0;
+    for (var i = 0; i < monitors.length; i++) {
+      if (monitors[i] && monitors[i].brightnessControlAvailable)
+        count++;
     }
-    function onDdcMonitorsChanged() {
-      root.updateMonitor();
-    }
+    return count;
   }
 
   visible: brightnessMonitor !== null
@@ -134,6 +141,8 @@ Item {
 
     screen: root.screen
     oppositeDirection: BarService.getPillDirection(root)
+    customIconColor: Color.resolveColorKeyOptional(root.iconColorKey)
+    customTextColor: Color.resolveColorKeyOptional(root.textColorKey)
     icon: getIcon()
     autoHide: false // Important to be false so we can hover as long as we want
     text: {
@@ -147,7 +156,8 @@ Item {
     forceClose: displayMode === "alwaysHide"
     tooltipText: {
       var monitor = brightnessMonitor;
-      if (!monitor || !monitor.brightnessControlAvailable || isNaN(monitor.brightness))
+      var panel = PanelService.getPanel("brightnessPanel", screen);
+      if (panel?.isPanelOpen || !monitor || !monitor.brightnessControlAvailable || isNaN(monitor.brightness))
         return "";
       return I18n.tr("tooltips.brightness-at", {
                        "brightness": Math.round(monitor.brightness * 100)
@@ -159,10 +169,25 @@ Item {
       if (!monitor || !monitor.brightnessControlAvailable)
         return;
 
+      if (root.reverseScroll)
+        angle *= -1;
+
+      if (angle === 0)
+        return;
+
+      var shouldApplyToAll = root.applyToAllMonitors && root.getControllableMonitorCount() > 1;
       if (angle > 0) {
-        monitor.increaseBrightness();
+        if (shouldApplyToAll) {
+          BrightnessService.increaseBrightness();
+        } else {
+          monitor.increaseBrightness();
+        }
       } else if (angle < 0) {
-        monitor.decreaseBrightness();
+        if (shouldApplyToAll) {
+          BrightnessService.decreaseBrightness();
+        } else {
+          monitor.decreaseBrightness();
+        }
       }
     }
 

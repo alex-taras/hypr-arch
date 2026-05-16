@@ -14,10 +14,13 @@ NBox {
 
   required property var screen
   readonly property string screenName: screen?.name || ""
+  // determine bar orientation
+  readonly property string barPosition: Settings.getBarPositionForScreen(screenName)
+  readonly property bool barIsVertical: barPosition === "left" || barPosition === "right"
 
   color: Color.mSurfaceVariant
   Layout.fillWidth: true
-  implicitHeight: content.implicitHeight + Style.marginL * 2
+  implicitHeight: content.implicitHeight + Style.margin2L
 
   // Helper to get widgets for this screen (ensures override exists)
   function _getWidgetsContainer() {
@@ -44,15 +47,14 @@ NBox {
       var metadata = BarWidgetRegistry.widgetMetadata[widgetId];
       if (metadata) {
         Object.keys(metadata).forEach(function (key) {
-          if (key !== "allowUserSettings") {
-            newWidget[key] = metadata[key];
-          }
+          newWidget[key] = metadata[key];
         });
       }
     }
     var widgets = _getWidgetsContainer();
     widgets[section].push(newWidget);
     _saveWidgets(widgets);
+    BarService.widgetsRevision++;
   }
 
   function _removeWidgetFromSection(section, index) {
@@ -62,6 +64,7 @@ NBox {
       var removedWidgets = newArray.splice(index, 1);
       widgets[section] = newArray;
       _saveWidgets(widgets);
+      BarService.widgetsRevision++;
 
       if (removedWidgets[0].id === "ControlCenter" && BarService.lookupWidget("ControlCenter") === undefined) {
         ToastService.showWarning(I18n.tr("toast.missing-control-center.label"), I18n.tr("toast.missing-control-center.description"), 12000);
@@ -78,9 +81,12 @@ NBox {
       newArray.splice(toIndex, 0, item);
       widgets[section] = newArray;
       _saveWidgets(widgets);
+      BarService.widgetsRevision++;
     }
   }
 
+  // Note: _updateWidgetSettingsInSection does NOT increment revision
+  // because it only changes settings, not widget structure
   function _updateWidgetSettingsInSection(section, index, settings) {
     var widgets = _getWidgetsContainer();
     widgets[section][index] = settings;
@@ -98,6 +104,7 @@ NBox {
       targetArray.push(widget);
       widgets[toSection] = targetArray;
       _saveWidgets(widgets);
+      BarService.widgetsRevision++;
     }
   }
 
@@ -110,6 +117,7 @@ NBox {
     for (var i = 0; i < widgetIds.length; i++) {
       var id = widgetIds[i];
       var displayName = id;
+      const badges = [];
       if (BarWidgetRegistry.isPluginWidget(id)) {
         var pluginId = id.replace("plugin:", "");
         var manifest = PluginRegistry.getPluginManifest(pluginId);
@@ -118,15 +126,26 @@ NBox {
         } else {
           displayName = pluginId;
         }
+        badges.push({
+                      "icon": "plugin",
+                      "color": Color.mSecondary
+                    });
+      }
+      if (BarWidgetRegistry.isCpuIntensive(id)) {
+        badges.push({
+                      "icon": "cpu-intensive",
+                      "color": Color.mSecondary
+                    });
       }
       availableWidgetsModel.append({
                                      "key": id,
-                                     "name": displayName
+                                     "name": displayName,
+                                     "badges": badges
                                    });
     }
   }
 
-  Component.onCompleted: updateAvailableWidgetsModel()
+  Component.onCompleted: Qt.callLater(updateAvailableWidgetsModel)
 
   ListModel {
     id: availableWidgetsModel
@@ -149,8 +168,9 @@ NBox {
 
     // Left Section
     NSectionEditor {
-      sectionName: I18n.tr("positions.left")
+      sectionName: root.barIsVertical ? I18n.tr("positions.top") : I18n.tr("positions.left")
       sectionId: "left"
+      barIsVertical: root.barIsVertical
       screen: root.screen
       settingsDialogComponent: Qt.resolvedUrl(Quickshell.shellDir + "/Modules/Panels/Settings/Bar/BarWidgetSettingsDialog.qml")
       widgetRegistry: BarWidgetRegistry
@@ -168,6 +188,7 @@ NBox {
     NSectionEditor {
       sectionName: I18n.tr("positions.center")
       sectionId: "center"
+      barIsVertical: root.barIsVertical
       screen: root.screen
       settingsDialogComponent: Qt.resolvedUrl(Quickshell.shellDir + "/Modules/Panels/Settings/Bar/BarWidgetSettingsDialog.qml")
       widgetRegistry: BarWidgetRegistry
@@ -183,8 +204,9 @@ NBox {
 
     // Right Section
     NSectionEditor {
-      sectionName: I18n.tr("positions.right")
+      sectionName: root.barIsVertical ? I18n.tr("positions.bottom") : I18n.tr("positions.right")
       sectionId: "right"
+      barIsVertical: root.barIsVertical
       screen: root.screen
       settingsDialogComponent: Qt.resolvedUrl(Quickshell.shellDir + "/Modules/Panels/Settings/Bar/BarWidgetSettingsDialog.qml")
       widgetRegistry: BarWidgetRegistry

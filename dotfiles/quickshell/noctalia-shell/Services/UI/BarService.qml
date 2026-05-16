@@ -24,15 +24,251 @@ Singleton {
 
   property var readyBars: ({})
 
+  // Revision counter - increment when widget list structure changes (add/remove/reorder)
+  // This triggers Bar.qml to re-sync its ListModels
+  property int widgetsRevision: 0
+
   // Registry to store actual widget instances
   // Key format: "screenName|section|widgetId|index"
   property var widgetInstances: ({})
 
   signal activeWidgetsChanged
   signal barReadyChanged(string screenName)
+  signal barAutoHideStateChanged(string screenName, bool hidden)
+  signal barHoverStateChanged(string screenName, bool hovered)
+
+  // Track if a popup menu is open from the bar (prevents auto-hide)
+  property bool popupOpen: false
+
+  // Auto-hide state per screen: { screenName: { hovered: bool, hidden: bool } }
+  property var screenAutoHideState: ({})
+
+  // Get or create auto-hide state for a screen
+  function getOrCreateAutoHideState(screenName) {
+    if (!screenAutoHideState[screenName]) {
+      screenAutoHideState[screenName] = {
+        "hovered": false,
+        "hidden": Settings.getBarDisplayModeForScreen(screenName) === "auto_hide"
+      };
+    }
+    return screenAutoHideState[screenName];
+  }
+
+  // Set hover state for a screen
+  function setScreenHovered(screenName, hovered) {
+    var state = getOrCreateAutoHideState(screenName);
+    if (state.hovered !== hovered) {
+      state.hovered = hovered;
+      screenAutoHideState = Object.assign({}, screenAutoHideState);
+      barHoverStateChanged(screenName, hovered);
+    }
+  }
+
+  // Set hidden state for a screen
+  function setScreenHidden(screenName, hidden) {
+    var state = getOrCreateAutoHideState(screenName);
+    if (state.hidden !== hidden) {
+      state.hidden = hidden;
+      screenAutoHideState = Object.assign({}, screenAutoHideState);
+      barAutoHideStateChanged(screenName, hidden);
+    }
+  }
+
+  // Check if bar is hidden on a screen
+  function isBarHidden(screenName) {
+    var state = screenAutoHideState[screenName];
+    return state ? state.hidden : false;
+  }
+
+  // Check if bar is hovered on a screen
+  function isBarHovered(screenName) {
+    var state = screenAutoHideState[screenName];
+    return state ? state.hovered : false;
+  }
+
+  // Toggle bar visibility. In auto-hide mode, toggles the per-screen hidden
+  // state without touching isVisible (so hover-to-show still works).
+  // For non-auto-hide screens, toggles the global isVisible flag.
+  function toggleVisibility() {
+    // Check if any auto-hide screen is currently visible
+    var anyAutoHideVisible = false;
+    var hasAutoHideScreens = false;
+    for (var screenName in screenAutoHideState) {
+      if (Settings.getBarDisplayModeForScreen(screenName) === "auto_hide") {
+        hasAutoHideScreens = true;
+        if (!screenAutoHideState[screenName].hidden) {
+          anyAutoHideVisible = true;
+          break;
+        }
+      }
+    }
+
+    // Toggle auto-hide screens (per-screen hidden state only)
+    if (hasAutoHideScreens) {
+      for (var screenName in screenAutoHideState) {
+        if (Settings.getBarDisplayModeForScreen(screenName) === "auto_hide") {
+          setScreenHidden(screenName, anyAutoHideVisible);
+        }
+      }
+    }
+
+    // Only toggle global visibility when no auto-hide screens exist,
+    // otherwise it would permanently disable hover-to-show
+    if (!hasAutoHideScreens) {
+      isVisible = !isVisible;
+    }
+  }
+
+  // Show bar. In auto-hide mode, un-hides on screens with auto-hide enabled.
+  // The bar stays visible until the user hovers and moves away.
+  function show() {
+    // Show auto-hide screens
+    for (var screenName in screenAutoHideState) {
+      if (Settings.getBarDisplayModeForScreen(screenName) === "auto_hide") {
+        setScreenHidden(screenName, false);
+      }
+    }
+    // Set global visibility (affects non-auto-hide screens)
+    isVisible = true;
+  }
+
+  // Hide bar. In auto-hide mode, sets per-screen hidden state without touching
+  // isVisible so hover-to-show still works. For non-auto-hide screens, sets
+  // global visibility to false.
+  function hide() {
+    var hasAutoHideScreens = false;
+    for (var screenName in screenAutoHideState) {
+      if (Settings.getBarDisplayModeForScreen(screenName) === "auto_hide") {
+        setScreenHidden(screenName, true);
+        hasAutoHideScreens = true;
+      }
+    }
+    // Only set global visibility off when no auto-hide screens exist,
+    // otherwise it would permanently disable hover-to-show
+    if (!hasAutoHideScreens) {
+      isVisible = false;
+    }
+  }
+
+  // Temporarily show the bar, then auto-hide after the configured delay.
+  // Uses the same pattern as workspace switch: show, then emit unhover
+  // to start the hide timer.
+  function peek() {
+    for (var screenName in screenAutoHideState) {
+      if (Settings.getBarDisplayModeForScreen(screenName) === "auto_hide") {
+        setScreenHidden(screenName, false);
+        if (!isBarHovered(screenName)) {
+          barHoverStateChanged(screenName, false);
+        }
+      }
+    }
+  }
 
   Component.onCompleted: {
     Logger.i("BarService", "Service started");
+  }
+
+  // Bump widgetsRevision when settings are reloaded from an external file change
+  // so Bar.qml re-syncs its widget ListModels with the updated widget configuration
+  Connections {
+    target: Settings
+    function onSettingsReloaded() {
+      Logger.d("BarService", "Settings reloaded externally, bumping widgetsRevision");
+      root.widgetsRevision++;
+    }
+  }
+
+  // update bar's hidden state when mode changes
+  Connections {
+    target: Settings.data.bar
+    function onDisplayModeChanged() {
+      Logger.d("BarService", "Display mode changed to:", Settings.data.bar.displayMode);
+
+      // Only affect screens without displayMode overrides
+      for (let screenName in screenAutoHideState) {
+        if (!Settings.hasScreenOverride(screenName, "displayMode")) {
+          var displayMode = Settings.getBarDisplayModeForScreen(screenName);
+          if (displayMode === "auto_hide") {
+            setScreenHidden(screenName, true);
+          } else {
+            if (screenAutoHideState[screenName].hidden) {
+              setScreenHidden(screenName, false);
+            }
+          }
+        }
+      }
+    }
+
+    function onScreenOverridesChanged() {
+      Logger.d("BarService", "Screen overrides changed, re-evaluating auto-hide states");
+
+      // Re-evaluate auto-hide state for all screens
+      for (let screenName in screenAutoHideState) {
+        var displayMode = Settings.getBarDisplayModeForScreen(screenName);
+        if (displayMode === "auto_hide") {
+          if (!screenAutoHideState[screenName].hidden) {
+            setScreenHidden(screenName, true);
+          }
+        } else {
+          if (screenAutoHideState[screenName].hidden) {
+            setScreenHidden(screenName, false);
+          }
+        }
+      }
+    }
+  }
+
+  // Track last workspace ID to detect actual workspace changes
+  property var lastWorkspaceId: null
+
+  // Debounce rapid workspace switches to reduce load/unload races (SIGSEGV in QV4)
+  property string _pendingWorkspaceScreen: ""
+
+  Timer {
+    id: workspaceDebounceTimer
+    interval: 80
+    repeat: false
+    onTriggered: {
+      var screen = root._pendingWorkspaceScreen;
+      root._pendingWorkspaceScreen = "";
+      if (screen) {
+        setScreenHidden(screen, false);
+        if (!root.isBarHovered(screen)) {
+          barHoverStateChanged(screen, false);
+        }
+      }
+    }
+  }
+
+  // Workspace switch handler - directly show bar on the focused workspace screen
+  Connections {
+    target: CompositorService
+    function onWorkspaceChanged() {
+      if (!Settings.data.bar.showOnWorkspaceSwitch)
+        return;
+      if (Settings.data.bar.displayMode !== "auto_hide")
+        return;
+
+      var ws = CompositorService.getCurrentWorkspace();
+      if (!ws || !ws.output) {
+        return;
+      }
+
+      // Only trigger if workspace actually changed
+      var currentWsId = ws.id;
+      if (currentWsId === root.lastWorkspaceId) {
+        return;
+      }
+      root.lastWorkspaceId = currentWsId;
+
+      var screenName = ws.output || "";
+      Logger.d("BarService", "Workspace switched to:", currentWsId, "on screen:", screenName);
+
+      // Debounce: rapid switches (e.g. external monitor ↔ laptop) cause overlapping
+      // bar load/unload; 80ms delay coalesces them and reduces QV4 incubation races
+      root._pendingWorkspaceScreen = screenName;
+      workspaceDebounceTimer.restart();
+    }
   }
 
   // Function for the Bar to call when it's ready

@@ -25,6 +25,8 @@ Singleton {
 
   // Expose decoded thumbnails by id and a revision to notify bindings
   property var imageDataById: ({})
+  property var _imageDataInsertOrder: [] // insertion-order IDs for LRU eviction
+  readonly property int _imageDataMaxEntries: 20 // max decoded images held in RAM at once
   property int revision: 0
 
   // Local content cache - stores full text content by ID
@@ -112,7 +114,7 @@ Singleton {
       const out = String(stdout.text);
       const lines = out.split('\n').filter(l => l.length > 0);
       // cliphist list default format: "<id> <preview>" or "<id>\t<preview>"
-      const parsed = lines.map(l => {
+      const parsed = lines.map((l, i) => {
                                  let id = "";
                                  let preview = "";
                                  const m = l.match(/^(\d+)\s+(.+)$/);
@@ -142,13 +144,34 @@ Singleton {
                                  }
                                  // Record first seen time for new ids (approximate copy time)
                                  if (!root.firstSeenById[id]) {
-                                   root.firstSeenById[id] = Time.timestamp;
+                                   const assumedAge = i * 15 * 60;
+                                   root.firstSeenById[id] = Time.timestamp - assumedAge;
                                  }
+                                 // Smart type detection
+                                 var contentType = "text";
+                                 if (isImage) {
+                                   contentType = "image";
+                                 } else {
+                                   const t = preview.trim();
+                                   const tLower = t.toLowerCase();
+                                   if (/^#([a-f0-9]{3}|[a-f0-9]{6}|[a-f0-9]{8})$/.test(tLower)) {
+                                     contentType = "color";
+                                   } else if (/^https?:\/\//i.test(t)) {
+                                     contentType = "link";
+                                   } else if (/^(\/|~\/|file:\/\/)/i.test(t) && !t.startsWith('//') && !t.includes('\n')) {
+                                     contentType = "file";
+                                   } else if ((t.includes('{') && t.includes('}') && (t.includes(';') || t.includes('='))) || t.includes('</') || t.includes('/>') || t.includes('=>') || t.includes('===') || t.includes('!==') || t.includes('::') || t.includes('->') ||
+                                              /^(?:const|let|var|function|class|struct|interface|type|enum|import|export|func|fn|pub|def|using|namespace|property|public|private|protected)\b/i.test(t) || /^(?:#include|#define|#\[|@|\/\/|\/\*|<\?|<html|<body|<!DOCTYPE)/i.test(t) || /\b(?:require\(|module\.exports)\b/i.test(t)) {
+                                     contentType = "code";
+                                   }
+                                 }
+
                                  return {
                                    "id": id,
                                    "preview": preview,
                                    "isImage": isImage,
-                                   "mime": mime
+                                   "mime": mime,
+                                   "contentType": contentType
                                  };
                                });
 
@@ -227,7 +250,14 @@ Singleton {
         } catch (e) {}
       }
       if (root._b64CurrentId !== "") {
-        root.imageDataById[root._b64CurrentId] = `data:${root._b64CurrentMime};base64,${b64}`;
+        const entryId = root._b64CurrentId;
+        root.imageDataById[entryId] = `data:${root._b64CurrentMime};base64,${b64}`;
+        // Track insertion order and evict oldest entries beyond the cap
+        root._imageDataInsertOrder.push(entryId);
+        while (root._imageDataInsertOrder.length > root._imageDataMaxEntries) {
+          const evicted = root._imageDataInsertOrder.shift();
+          delete root.imageDataById[evicted];
+        }
         root.revision += 1;
       }
       root._b64CurrentCb = null;
@@ -242,11 +272,19 @@ Singleton {
     id: watchText
     stdout: StdioCollector {}
     onExited: (exitCode, exitStatus) => {
-      if (root.autoWatch && root.watchersStarted) {
-        Qt.callLater(() => {
-                       watchText.running = true;
-                     });
+      if (root.autoWatch && root.watchersStarted && Settings.data.appLauncher.clipboardWatchTextCommand.trim() !== "") {
+        watchTextRestartTimer.restart();
       }
+    }
+  }
+
+  Timer {
+    id: watchTextRestartTimer
+    interval: 1000
+    repeat: false
+    onTriggered: {
+      if (root.autoWatch && root.watchersStarted)
+      watchText.running = true;
     }
   }
 
@@ -255,11 +293,19 @@ Singleton {
     id: watchImage
     stdout: StdioCollector {}
     onExited: (exitCode, exitStatus) => {
-      if (root.autoWatch && root.watchersStarted) {
-        Qt.callLater(() => {
-                       watchImage.running = true;
-                     });
+      if (root.autoWatch && root.watchersStarted && Settings.data.appLauncher.clipboardWatchImageCommand.trim() !== "") {
+        watchImageRestartTimer.restart();
       }
+    }
+  }
+
+  Timer {
+    id: watchImageRestartTimer
+    interval: 1000
+    repeat: false
+    onTriggered: {
+      if (root.autoWatch && root.watchersStarted)
+      watchImage.running = true;
     }
   }
 
@@ -291,11 +337,11 @@ Singleton {
     watchersStarted = true;
 
     // Text watcher
-    watchText.command = ["sh", "-lc", Settings.data.appLauncher.clipboardWatchTextCommand];
+    watchText.command = ["sh", "-c", Settings.data.appLauncher.clipboardWatchTextCommand];
     watchText.running = true;
 
     // Image watcher
-    watchImage.command = ["sh", "-lc", Settings.data.appLauncher.clipboardWatchImageCommand];
+    watchImage.command = ["sh", "-c", Settings.data.appLauncher.clipboardWatchImageCommand];
     watchImage.running = true;
   }
 
@@ -407,7 +453,7 @@ Singleton {
     root._b64CurrentCb = job.cb;
     root._b64CurrentMime = job.mime;
     root._b64CurrentId = job.id;
-    decodeB64Proc.command = ["sh", "-lc", `cliphist decode ${job.id} | base64 -w 0`];
+    decodeB64Proc.command = ["sh", "-c", `cliphist decode ${job.id} | base64 -w 0`];
     decodeB64Proc.running = true;
   }
 
@@ -415,7 +461,7 @@ Singleton {
     if (!root.cliphistAvailable) {
       return;
     }
-    copyProc.command = ["sh", "-lc", `cliphist decode ${id} | wl-copy`];
+    copyProc.command = ["sh", "-c", `cliphist decode ${id} | wl-copy`];
     copyProc.running = true;
   }
 
@@ -427,7 +473,7 @@ Singleton {
     const typeArg = isImage ? ` --type ${mime}` : "";
     const pasteKeys = isImage ? "wtype -M ctrl -k v" : "wtype -M ctrl -M shift v";
     const cmd = `cliphist decode ${id} | wl-copy${typeArg} && ${pasteKeys}`;
-    pasteProc.command = ["sh", "-lc", cmd];
+    pasteProc.command = ["sh", "-c", cmd];
     pasteProc.running = true;
   }
 
@@ -436,7 +482,7 @@ Singleton {
       return;
     const escaped = text.replace(/'/g, "'\\''");
     const cmd = `printf '%s' '${escaped}' | wl-copy && wtype -M ctrl -M shift v`;
-    pasteProc.command = ["sh", "-lc", cmd];
+    pasteProc.command = ["sh", "-c", cmd];
     pasteProc.running = true;
   }
 
@@ -448,8 +494,12 @@ Singleton {
       return;
     }
     const idStr = String(id).trim();
-    // Remove from cache
+    // Remove from caches
     delete root.contentCache[idStr];
+    delete root.imageDataById[idStr];
+    const orderIdx = root._imageDataInsertOrder.indexOf(idStr);
+    if (orderIdx !== -1)
+      root._imageDataInsertOrder.splice(orderIdx, 1);
     deleteProc.command = ["sh", "-c", `echo ${idStr} | cliphist delete`];
     deleteProc.running = true;
   }
@@ -461,6 +511,7 @@ Singleton {
     // Clear caches
     root.contentCache = {};
     root.imageDataById = {};
+    root._imageDataInsertOrder = [];
     root._latestTextContent = "";
     root._latestTextId = "";
 

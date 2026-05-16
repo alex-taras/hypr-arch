@@ -20,17 +20,17 @@ SmartPanel {
 
   readonly property string barDensity: Settings.data.bar.density
   readonly property string barPosition: Settings.getBarPositionForScreen(screen?.name)
-  readonly property bool barFloating: Settings.data.bar.floating
+  readonly property bool barFloating: Settings.data.bar.barType === "floating"
   readonly property real barMarginH: barFloating ? Math.ceil(Settings.data.bar.marginHorizontal) : 0
   readonly property real barMarginV: barFloating ? Math.ceil(Settings.data.bar.marginVertical) : 0
 
   forceAttachToBar: attachToBar
-  panelAnchorHorizontalCenter: attachToBar ? (barPosition === "top" || barPosition === "bottom") : true
-  panelAnchorVerticalCenter: attachToBar ? (barPosition === "left" || barPosition === "right") : true
-  panelAnchorTop: attachToBar && barPosition === "top"
-  panelAnchorBottom: attachToBar && barPosition === "bottom"
-  panelAnchorLeft: attachToBar && barPosition === "left"
-  panelAnchorRight: attachToBar && barPosition === "right"
+  panelAnchorHorizontalCenter: !root.useButtonPosition && (attachToBar ? (barPosition === "top" || barPosition === "bottom") : true)
+  panelAnchorVerticalCenter: !root.useButtonPosition && (attachToBar ? (barPosition === "left" || barPosition === "right") : true)
+  panelAnchorTop: !root.useButtonPosition && attachToBar && barPosition === "top"
+  panelAnchorBottom: !root.useButtonPosition && attachToBar && barPosition === "bottom"
+  panelAnchorLeft: !root.useButtonPosition && attachToBar && barPosition === "left"
+  panelAnchorRight: !root.useButtonPosition && attachToBar && barPosition === "right"
 
   onAttachToBarChanged: {
     if (isPanelOpen) {
@@ -82,13 +82,14 @@ SmartPanel {
     Dock,
     General,
     Hooks,
+    Idle,
     Launcher,
     Location,
-    Network,
+    Connections,
     Notifications,
     Plugins,
     SessionMenu,
-    SystemMonitor,
+    System,
     UserInterface,
     Wallpaper
   }
@@ -128,7 +129,15 @@ SmartPanel {
 
     // Panel mode: replicate SmartPanel.open() logic
     if (!buttonItem && buttonName) {
-      buttonItem = BarService.lookupWidget(buttonName, screen.name);
+      if (typeof buttonName === "object" && buttonName.x !== undefined && buttonName.y !== undefined) {
+        root.buttonItem = null;
+        root.buttonPosition = buttonName;
+        root.buttonWidth = 0;
+        root.buttonHeight = 0;
+        root.useButtonPosition = true;
+      } else {
+        buttonItem = BarService.lookupWidget(buttonName, screen.name);
+      }
     }
 
     if (buttonItem) {
@@ -138,7 +147,7 @@ SmartPanel {
       root.buttonWidth = buttonItem.width;
       root.buttonHeight = buttonItem.height;
       root.useButtonPosition = true;
-    } else {
+    } else if (!(buttonName && typeof buttonName === "object" && buttonName.x !== undefined && buttonName.y !== undefined)) {
       root.buttonItem = null;
       root.useButtonPosition = false;
     }
@@ -165,12 +174,11 @@ SmartPanel {
         Qt.callLater(() => _settingsContent.navigateToResult(entry));
       } else {
         _settingsContent.requestedTab = requestedTab;
-        _settingsContent.initialize();
         if (requestedSubTab >= 0) {
-          const subTab = requestedSubTab;
+          _settingsContent._pendingSubTab = requestedSubTab;
           requestedSubTab = -1;
-          Qt.callLater(() => _settingsContent.navigateToTab(requestedTab, subTab));
         }
+        _settingsContent.initialize();
       }
     }
   }

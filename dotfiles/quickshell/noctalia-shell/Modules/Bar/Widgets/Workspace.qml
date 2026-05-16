@@ -23,7 +23,7 @@ Item {
   property int sectionWidgetIndex: -1
   property int sectionWidgetsCount: 0
 
-  property var widgetMetadata: BarWidgetRegistry.widgetMetadata[widgetId]
+  property var widgetMetadata: BarWidgetRegistry.widgetMetadata[widgetId] ?? {}
   // Explicit screenName property ensures reactive binding when screen changes
   readonly property string screenName: screen ? screen.name : ""
   property var widgetSettings: {
@@ -41,44 +41,49 @@ Item {
   readonly property real barHeight: Style.getBarHeightForScreen(screenName)
   readonly property real capsuleHeight: Style.getCapsuleHeightForScreen(screenName)
   readonly property real barFontSize: Style.getBarFontSizeForScreen(screenName)
-  readonly property real baseDimensionRatio: 0.65
 
   readonly property string labelMode: (widgetSettings.labelMode !== undefined) ? widgetSettings.labelMode : widgetMetadata.labelMode
   readonly property bool hasLabel: (labelMode !== "none")
+  readonly property string fontWeight: {
+    var fontWeightSetting = (widgetSettings.fontWeight !== undefined) ? widgetSettings.fontWeight : widgetMetadata.fontWeight;
+
+    if (fontWeightSetting === "regular")
+      return Style.fontWeightRegular;
+    if (fontWeightSetting === "medium")
+      return Style.fontWeightMedium;
+    if (fontWeightSetting === "semibold")
+      return Style.fontWeightSemiBold;
+    if (fontWeightSetting === "bold")
+      return Style.fontWeightBold;
+    return Style.fontWeightBold;
+  }
   readonly property bool hideUnoccupied: (widgetSettings.hideUnoccupied !== undefined) ? widgetSettings.hideUnoccupied : widgetMetadata.hideUnoccupied
   readonly property bool followFocusedScreen: (widgetSettings.followFocusedScreen !== undefined) ? widgetSettings.followFocusedScreen : widgetMetadata.followFocusedScreen
-  readonly property int characterCount: isVertical ? 2 : ((widgetSettings.characterCount !== undefined) ? widgetSettings.characterCount : widgetMetadata.characterCount)
+  readonly property int characterCount: {
+    const count = (widgetSettings.characterCount !== undefined) ? widgetSettings.characterCount : widgetMetadata.characterCount;
+    return isVertical ? Math.min(count, 2) : count;
+  }
+
+  // Pill size setting (0.5-1.0 range)
+  readonly property real pillSize: (widgetSettings.pillSize !== undefined) ? widgetSettings.pillSize : widgetMetadata.pillSize
+
+  // When no label the pills are smaller
+  readonly property real baseDimensionRatio: pillSize
 
   // Grouped mode (show applications) settings
   readonly property bool showApplications: (widgetSettings.showApplications !== undefined) ? widgetSettings.showApplications : widgetMetadata.showApplications
+  readonly property bool showApplicationsHover: (widgetSettings.showApplicationsHover !== undefined) ? widgetSettings.showApplicationsHover : widgetMetadata.showApplicationsHover
   readonly property bool showLabelsOnlyWhenOccupied: (widgetSettings.showLabelsOnlyWhenOccupied !== undefined) ? widgetSettings.showLabelsOnlyWhenOccupied : widgetMetadata.showLabelsOnlyWhenOccupied
   readonly property bool colorizeIcons: (widgetSettings.colorizeIcons !== undefined) ? widgetSettings.colorizeIcons : widgetMetadata.colorizeIcons
   readonly property real unfocusedIconsOpacity: (widgetSettings.unfocusedIconsOpacity !== undefined) ? widgetSettings.unfocusedIconsOpacity : widgetMetadata.unfocusedIconsOpacity
   readonly property real groupedBorderOpacity: (widgetSettings.groupedBorderOpacity !== undefined) ? widgetSettings.groupedBorderOpacity : widgetMetadata.groupedBorderOpacity
   readonly property bool enableScrollWheel: (widgetSettings.enableScrollWheel !== undefined) ? widgetSettings.enableScrollWheel : widgetMetadata.enableScrollWheel
-  readonly property bool reverseScroll: (widgetSettings.reverseScroll !== undefined) ? widgetSettings.reverseScroll : (widgetMetadata.reverseScroll || false)
+  readonly property bool reverseScroll: Settings.data.general.reverseScroll
   readonly property real iconScale: (widgetSettings.iconScale !== undefined) ? widgetSettings.iconScale : widgetMetadata.iconScale
   readonly property string focusedColor: (widgetSettings.focusedColor !== undefined) ? widgetSettings.focusedColor : widgetMetadata.focusedColor
   readonly property string occupiedColor: (widgetSettings.occupiedColor !== undefined) ? widgetSettings.occupiedColor : widgetMetadata.occupiedColor
   readonly property string emptyColor: (widgetSettings.emptyColor !== undefined) ? widgetSettings.emptyColor : widgetMetadata.emptyColor
   readonly property bool showBadge: (widgetSettings.showBadge !== undefined) ? widgetSettings.showBadge : widgetMetadata.showBadge
-
-  // Helper to safely get colors with proper reactivity
-  // Accesses Color singleton directly to ensure fresh values
-  function getColorPair(colorKey) {
-    switch (colorKey) {
-    case "primary":
-      return [Color.mPrimary, Color.mOnPrimary];
-    case "secondary":
-      return [Color.mSecondary, Color.mOnSecondary];
-    case "tertiary":
-      return [Color.mTertiary, Color.mOnTertiary];
-    case "onSurface":
-      return [Color.mOnSurface, Color.mSurface];
-    default:
-      return [Color.mPrimary, Color.mOnPrimary];
-    }
-  }
 
   // Only for grouped mode / show apps
   readonly property int baseItemSize: Style.toOdd(capsuleHeight * 0.8)
@@ -105,7 +110,6 @@ Item {
   }
 
   property bool isDestroying: false
-  property bool hovered: false
 
   // Revision counter to force icon re-evaluation
   property int iconRevision: 0
@@ -127,8 +131,34 @@ Item {
 
   signal workspaceChanged(int workspaceId, color accentColor)
 
-  implicitWidth: showApplications ? (isVertical ? groupedGrid.implicitWidth : Math.round(groupedGrid.implicitWidth + horizontalPadding * hasLabel)) : (isVertical ? barHeight : computeWidth())
-  implicitHeight: showApplications ? (isVertical ? Math.round(groupedGrid.implicitHeight + horizontalPadding * 0.6 * hasLabel) : barHeight) : (isVertical ? computeHeight() : barHeight)
+  property bool isHovered: false
+
+  HoverHandler {
+    id: workspaceHoverHandler
+    enabled: showApplications && showApplicationsHover
+    onHoveredChanged: {
+      if (hovered) {
+        hoverEval.stop();
+        isHovered = true;
+      } else {
+        hoverEval.restart();
+      }
+    }
+  }
+
+  Timer {
+    id: hoverEval
+    interval: 150
+    repeat: false
+    onTriggered: {
+      isHovered = workspaceHoverHandler.hovered || contextMenu.visible;
+    }
+  }
+
+  readonly property bool appVisible: showApplications && (!showApplicationsHover || root.isHovered)
+
+  implicitWidth: appVisible ? (isVertical ? groupedGrid.implicitWidth : Math.round(groupedGrid.implicitWidth + horizontalPadding * hasLabel)) : (isVertical ? barHeight : computeWidth())
+  implicitHeight: appVisible ? (isVertical ? Math.round(groupedGrid.implicitHeight + horizontalPadding * 0.6 * hasLabel) : barHeight) : (isVertical ? computeHeight() : barHeight)
 
   function getWorkspaceWidth(ws, activeOverride) {
     const d = Math.round(capsuleHeight * root.baseDimensionRatio);
@@ -193,7 +223,7 @@ Item {
   }
 
   function switchByOffset(offset) {
-    if (localWorkspaces.count === 0)
+    if (localWorkspaces.count <= 1)
       return;
     var current = getFocusedLocalIndex();
     if (current < 0)
@@ -201,6 +231,8 @@ Item {
     var next = (current + offset) % localWorkspaces.count;
     if (next < 0)
       next = localWorkspaces.count - 1;
+    if (next === current)
+      return;
     const ws = localWorkspaces.get(next);
     if (ws && ws.idx !== undefined)
       CompositorService.switchToWorkspace(ws);
@@ -242,34 +274,44 @@ Item {
     Settings.data.dock.pinnedApps = pinnedApps;
   }
 
-  Component.onCompleted: {
-    refreshWorkspaces();
+  // Deferred via Qt.callLater to avoid synchronous ListModel mutations during
+  // signal cascades. Qt.callLater deduplicates by function identity, so rapid
+  // calls from multiple signal handlers coalesce into a single refresh.
+  function scheduleRefresh() {
+    if (!root.isDestroying)
+      Qt.callLater(root.refreshWorkspaces);
   }
+
+  Component.onCompleted: scheduleRefresh()
 
   Component.onDestruction: {
     root.isDestroying = true;
   }
 
-  onScreenChanged: refreshWorkspaces()
-  onScreenNameChanged: refreshWorkspaces()
-  onHideUnoccupiedChanged: refreshWorkspaces()
-  onShowApplicationsChanged: refreshWorkspaces()
+  onScreenChanged: scheduleRefresh()
+  onScreenNameChanged: scheduleRefresh()
+  onHideUnoccupiedChanged: scheduleRefresh()
+  onAppVisibleChanged: {
+    if (appVisible) {
+      scheduleRefresh();
+    }
+  }
 
   Connections {
     target: CompositorService
     function onWorkspacesChanged() {
-      refreshWorkspaces();
+      scheduleRefresh();
     }
     function onWindowListChanged() {
-      if (showApplications || showLabelsOnlyWhenOccupied) {
+      if (appVisible || showLabelsOnlyWhenOccupied) {
         root.windowRevision++;
-        refreshWorkspaces();
+        scheduleRefresh();
       }
     }
     function onActiveWindowChanged() {
-      if (showApplications) {
+      if (appVisible) {
         root.windowRevision++;
-        refreshWorkspaces();
+        scheduleRefresh();
       }
     }
   }
@@ -297,7 +339,8 @@ Item {
       const screenName = screen.name.toLowerCase();
       for (var i = 0; i < CompositorService.workspaces.count; i++) {
         const ws = CompositorService.workspaces.get(i);
-        const matchesScreen = (followFocusedScreen && ws.output.toLowerCase() == focusedOutput) || (!followFocusedScreen && ws.output.toLowerCase() == screenName);
+        // For global workspaces (e.g., LabWC), show all workspaces on all screens
+        const matchesScreen = CompositorService.globalWorkspaces || (followFocusedScreen && ws.output.toLowerCase() == focusedOutput) || (!followFocusedScreen && ws.output.toLowerCase() == screenName);
 
         if (!matchesScreen)
           continue;
@@ -404,6 +447,15 @@ Item {
   NPopupContextMenu {
     id: contextMenu
 
+    onVisibleChanged: {
+      if (visible) {
+        hoverEval.stop();
+        root.isHovered = true;
+      } else {
+        hoverEval.restart();
+      }
+    }
+
     model: {
       var items = [];
       if (root.selectedWindowId) {
@@ -480,7 +532,7 @@ Item {
 
   Rectangle {
     id: workspaceBackground
-    visible: !showApplications
+    visible: !appVisible
     width: isVertical ? capsuleHeight : parent.width
     height: isVertical ? parent.height : capsuleHeight
     radius: Style.radiusM
@@ -551,7 +603,15 @@ Item {
     spacing: spacingBetweenPills
     x: horizontalPadding
     y: 0
-    visible: !isVertical && !showApplications
+    visible: !isVertical && !appVisible
+    scale: visible ? 1.0 : 0.8
+    Behavior on scale {
+      NumberAnimation {
+        duration: Style.animationFast
+        easing.type: Easing.OutBack
+        easing.overshoot: 1.2
+      }
+    }
 
     Repeater {
       id: workspaceRepeaterHorizontal
@@ -564,6 +624,7 @@ Item {
         capsuleHeight: root.capsuleHeight
         barHeight: root.barHeight
         labelMode: root.labelMode
+        fontWeight: root.fontWeight
         characterCount: root.characterCount
         textRatio: root.textRatio
         showLabelsOnlyWhenOccupied: root.showLabelsOnlyWhenOccupied
@@ -585,7 +646,15 @@ Item {
     spacing: spacingBetweenPills
     x: 0
     y: horizontalPadding
-    visible: isVertical && !showApplications
+    visible: isVertical && !appVisible
+    scale: visible ? 1.0 : 0.8
+    Behavior on scale {
+      NumberAnimation {
+        duration: Style.animationFast
+        easing.type: Easing.OutBack
+        easing.overshoot: 1.2
+      }
+    }
 
     Repeater {
       id: workspaceRepeaterVertical
@@ -598,6 +667,7 @@ Item {
         capsuleHeight: root.capsuleHeight
         barHeight: root.barHeight
         labelMode: root.labelMode
+        fontWeight: root.fontWeight
         characterCount: root.characterCount
         textRatio: root.textRatio
         showLabelsOnlyWhenOccupied: root.showLabelsOnlyWhenOccupied
@@ -614,7 +684,7 @@ Item {
   }
 
   // ========================================
-  // Grouped mode (showApplications = true)
+  // Grouped mode (appVisible = true)
   // ========================================
   Component {
     id: groupedWorkspaceDelegate
@@ -637,41 +707,46 @@ Item {
         }
       }
 
-      Component.onCompleted: updateWindows()
-      onWorkspaceModelChanged: updateWindows()
+      // Deferred to avoid re-entrant incubation: when localWorkspaces.append()
+      Component.onCompleted: Qt.callLater(updateWindows)
+      onWorkspaceModelChanged: Qt.callLater(updateWindows)
 
       Connections {
         target: root
         function onWindowRevisionChanged() {
-          groupedContainer.updateWindows();
+          Qt.callLater(groupedContainer.updateWindows);
         }
+      }
+
+      HoverHandler {
+        id: groupHoverHandler
       }
 
       width: Style.toOdd((hasWindows ? groupedIconsFlow.implicitWidth : root.iconSize) + (root.isVertical ? (root.baseItemSize - root.iconSize + Style.marginXS) : Style.marginXL))
       height: Style.toOdd((hasWindows ? groupedIconsFlow.implicitHeight : root.iconSize) + (root.isVertical ? Style.marginL : (root.baseItemSize - root.iconSize + Style.marginXS)))
       color: Style.capsuleColor
       radius: Style.radiusS
-      border.color: Settings.data.bar.showOutline ? Style.capsuleBorderColor : Qt.alpha((workspaceModel.isFocused ? Color.mPrimary : Color.mOutline), root.groupedBorderOpacity)
+      border.color: Settings.data.bar.showOutline ? Style.capsuleBorderColor : Qt.alpha((workspaceModel.isFocused ? Color.mPrimary : (groupHoverHandler.hovered ? Color.mHover : Color.mOutline)), root.groupedBorderOpacity)
       border.width: Style.borderS
 
       Behavior on width {
         NumberAnimation {
-          duration: Style.animationNormal
-          easing.type: Easing.OutBack
+          duration: Style.animationFast
+          easing.type: Easing.OutCubic
         }
       }
       Behavior on height {
         NumberAnimation {
-          duration: Style.animationNormal
-          easing.type: Easing.OutBack
+          duration: Style.animationFast
+          easing.type: Easing.OutCubic
         }
       }
 
       MouseArea {
         anchors.fill: parent
         hoverEnabled: true
-        enabled: !groupedContainer.hasWindows
-        cursorShape: enabled ? Qt.PointingHandCursor : Qt.ArrowCursor
+        enabled: true
+        cursorShape: Qt.PointingHandCursor
         acceptedButtons: Qt.LeftButton | Qt.RightButton
         preventStealing: true
         onPressed: mouse => {
@@ -704,34 +779,39 @@ Item {
           delegate: Item {
             id: groupedTaskbarItem
 
-            property bool itemHovered: false
+            readonly property bool isFocused: modelData?.isFocused ?? false
 
             width: root.iconSize
             height: root.iconSize
+
+            HoverHandler {
+              id: windowHoverHandler
+            }
 
             IconImage {
               id: groupedAppIcon
 
               width: parent.width
               height: parent.height
+
               source: {
                 root.iconRevision; // Force re-evaluation when revision changes
-                return ThemeIcons.iconForAppId(modelData.appId?.toLowerCase());
+                return ThemeIcons.iconForAppId(modelData?.appId?.toLowerCase());
               }
               smooth: true
               asynchronous: true
-              opacity: modelData.isFocused ? Style.opacityFull : unfocusedIconsOpacity
-              layer.enabled: root.colorizeIcons && !modelData.isFocused
+              opacity: groupedTaskbarItem.isFocused ? Style.opacityFull : unfocusedIconsOpacity
+              layer.enabled: root.colorizeIcons && !groupedTaskbarItem.isFocused
 
               Rectangle {
                 id: groupedFocusIndicator
-                visible: modelData.isFocused
+                visible: groupedTaskbarItem.isFocused || windowHoverHandler.hovered
                 anchors.bottomMargin: -2
                 anchors.bottom: parent.bottom
                 anchors.horizontalCenter: parent.horizontalCenter
                 width: Style.toOdd(root.iconSize * 0.25)
                 height: 4
-                color: Color.mPrimary
+                color: groupedTaskbarItem.isFocused ? Color.mPrimary : Color.mHover
                 radius: Math.min(Style.radiusXXS, width / 2)
               }
 
@@ -750,13 +830,13 @@ Item {
               preventStealing: true
 
               onPressed: mouse => {
-                           if (mouse.button === Qt.LeftButton) {
+                           if (mouse.button === Qt.LeftButton && modelData) {
                              CompositorService.focusWindow(modelData);
                            }
                          }
 
               onReleased: mouse => {
-                            if (mouse.button === Qt.RightButton) {
+                            if (mouse.button === Qt.RightButton && modelData) {
                               mouse.accepted = true;
                               TooltipService.hide();
                               root.selectedWindowId = modelData.id || modelData.address || "";
@@ -765,11 +845,11 @@ Item {
                             }
                           }
               onEntered: {
-                groupedTaskbarItem.itemHovered = true;
+                if (!modelData)
+                  return;
                 TooltipService.show(groupedTaskbarItem, modelData.title || modelData.appId || "Unknown app.", BarService.getTooltipDirection(root.screenName));
               }
               onExited: {
-                groupedTaskbarItem.itemHovered = false;
                 TooltipService.hide();
               }
             }
@@ -789,7 +869,7 @@ Item {
           topMargin: -Style.fontSizeXS * 0.25
         }
 
-        width: Math.max(groupedWorkspaceNumber.implicitWidth + (Style.marginXS * 2), Style.fontSizeXXS * 2)
+        width: Math.max(groupedWorkspaceNumber.implicitWidth + Style.margin2XS, Style.fontSizeXXS * 2)
         height: Math.max(groupedWorkspaceNumber.implicitHeight + Style.marginXS, Style.fontSizeXXS * 2)
 
         Rectangle {
@@ -800,13 +880,13 @@ Item {
 
           color: {
             if (groupedContainer.workspaceModel.isFocused)
-              return root.getColorPair(root.focusedColor)[0];
+              return Color.resolveColorKey(root.focusedColor);
             if (groupedContainer.workspaceModel.isUrgent)
               return Color.mError;
             if (groupedContainer.hasWindows)
-              return root.getColorPair(root.occupiedColor)[0];
+              return Color.resolveColorKey(root.occupiedColor);
 
-            return root.getColorPair(root.emptyColor)[0];
+            return Color.resolveColorKey(root.emptyColor);
           }
 
           scale: groupedContainer.workspaceModel.isActive ? 1.0 : 0.8
@@ -862,20 +942,20 @@ Item {
           family: Settings.data.ui.fontFixed
           font {
             pointSize: barFontSize * 0.75
-            weight: Style.fontWeightBold
+            weight: fontWeight
             capitalization: Font.AllUppercase
           }
           applyUiScale: false
 
           color: {
             if (groupedContainer.workspaceModel.isFocused)
-              return root.getColorPair(root.focusedColor)[1];
+              return Color.resolveOnColorKey(root.focusedColor);
             if (groupedContainer.workspaceModel.isUrgent)
               return Color.mOnError;
             if (groupedContainer.hasWindows)
-              return root.getColorPair(root.occupiedColor)[1];
+              return Color.resolveOnColorKey(root.occupiedColor);
 
-            return root.getColorPair(root.emptyColor)[1];
+            return Color.resolveOnColorKey(root.emptyColor);
           }
 
           Behavior on opacity {
@@ -898,7 +978,15 @@ Item {
 
   Flow {
     id: groupedGrid
-    visible: showApplications
+    visible: appVisible
+    scale: visible ? 1.0 : 0.8
+    Behavior on scale {
+      NumberAnimation {
+        duration: Style.animationFast
+        easing.type: Easing.OutCubic
+        easing.overshoot: 1.2
+      }
+    }
 
     x: root.isVertical ? Style.pixelAlignCenter(parent.width, width) : Math.round(horizontalPadding * root.hasLabel)
     y: root.isVertical ? Math.round(horizontalPadding * 0.4 * root.hasLabel) : Style.pixelAlignCenter(parent.height, height)
@@ -907,12 +995,13 @@ Item {
     flow: root.isVertical ? Flow.TopToBottom : Flow.LeftToRight
 
     Repeater {
-      model: showApplications ? localWorkspaces : null
+      model: appVisible ? localWorkspaces : null
       delegate: groupedWorkspaceDelegate
     }
   }
 
   function openGroupedContextMenu(item) {
-    PanelService.showContextMenu(contextMenu, item, screen);
+    // Anchor to root (stable) but center horizontally on the clicked item
+    PanelService.showContextMenu(contextMenu, root, screen, item);
   }
 }

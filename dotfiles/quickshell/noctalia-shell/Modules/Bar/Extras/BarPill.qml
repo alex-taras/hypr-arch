@@ -10,9 +10,10 @@ Item {
   required property ShellScreen screen
 
   property string icon: ""
+  property string iconPosition: ""
   property string text: ""
   property string suffix: ""
-  property string tooltipText: ""
+  property var tooltipText
   property bool autoHide: false
   property bool forceOpen: false
   property bool forceClose: false
@@ -21,6 +22,8 @@ Item {
   property bool rotateText: false
   property color customBackgroundColor: "transparent"
   property color customTextIconColor: "transparent"
+  property color customIconColor: "transparent"
+  property color customTextColor: "transparent"
 
   readonly property string barPosition: Settings.getBarPositionForScreen(screen?.name)
   readonly property bool isVerticalBar: barPosition === "left" || barPosition === "right"
@@ -53,6 +56,7 @@ Item {
       BarPillVertical {
         screen: root.screen
         icon: root.icon
+        iconPosition: root.iconPosition
         text: root.text
         suffix: root.suffix
         tooltipText: root.tooltipText
@@ -64,6 +68,8 @@ Item {
         rotateText: root.rotateText
         customBackgroundColor: root.customBackgroundColor
         customTextIconColor: root.customTextIconColor
+        customIconColor: root.customIconColor
+        customTextColor: root.customTextColor
         onShown: root.shown()
         onHidden: root.hidden()
         onEntered: root.entered()
@@ -80,6 +86,7 @@ Item {
       BarPillHorizontal {
         screen: root.screen
         icon: root.icon
+        iconPosition: root.iconPosition
         text: root.text
         suffix: root.suffix
         tooltipText: root.tooltipText
@@ -90,6 +97,8 @@ Item {
         hovered: root.hovered
         customBackgroundColor: root.customBackgroundColor
         customTextIconColor: root.customTextIconColor
+        customIconColor: root.customIconColor
+        customTextColor: root.customTextColor
         onShown: root.shown()
         onHidden: root.hidden()
         onEntered: root.entered()

@@ -15,22 +15,27 @@ NBox {
   property bool showEffects: Settings.data.location.weatherShowEffects
   readonly property bool weatherReady: Settings.data.location.weatherEnabled && (LocationService.data.weather !== null)
 
-  // Test mode: set to "rain" or "snow"
+  // Test mode: set to "clear_day", "clear_night", "rain", "snow", "cloud" or "fog"
   property string testEffects: ""
 
   // Weather condition detection
   readonly property int currentWeatherCode: weatherReady ? LocationService.data.weather.current_weather.weathercode : 0
+  readonly property bool isDayTime: weatherReady ? LocationService.data.weather.current_weather.is_day : true
   readonly property bool isRaining: testEffects === "rain" || (testEffects === "" && ((currentWeatherCode >= 51 && currentWeatherCode <= 67) || (currentWeatherCode >= 80 && currentWeatherCode <= 82)))
   readonly property bool isSnowing: testEffects === "snow" || (testEffects === "" && ((currentWeatherCode >= 71 && currentWeatherCode <= 77) || (currentWeatherCode >= 85 && currentWeatherCode <= 86)))
+  readonly property bool isCloudy: testEffects === "cloud" || (testEffects === "" && (currentWeatherCode === 3))
+  readonly property bool isFoggy: testEffects === "fog" || (testEffects === "" && (currentWeatherCode >= 40 && currentWeatherCode <= 49))
+  readonly property bool isClearDay: testEffects === "clear_day" || (testEffects === "" && (currentWeatherCode === 0 && isDayTime))
+  readonly property bool isClearNight: testEffects === "clear_night" || (testEffects === "" && (currentWeatherCode === 0 && !isDayTime))
 
   visible: Settings.data.location.weatherEnabled
-  implicitHeight: Math.max(100 * Style.uiScaleRatio, content.implicitHeight + (Style.marginXL * 2))
+  implicitHeight: Math.max(100 * Style.uiScaleRatio, content.implicitHeight + Style.margin2XL)
 
   // Weather effect layer (rain/snow)
   Loader {
     id: weatherEffectLoader
     anchors.fill: parent
-    active: root.showEffects && (root.isRaining || root.isSnowing)
+    active: root.showEffects && (root.isRaining || root.isSnowing || root.isCloudy || root.isFoggy || root.isClearDay || root.isClearNight)
 
     sourceComponent: Item {
       anchors.fill: parent
@@ -40,28 +45,46 @@ NBox {
       NumberAnimation on shaderTime {
         loops: Animation.Infinite
         from: 0
-        to: 1000
-        duration: 100000
+        to: root.isSnowing ? 900 : 3000
+        duration: 300000
       }
 
       ShaderEffect {
         id: weatherEffect
         anchors.fill: parent
-        // Snow fills the box, rain matches content margins
-        anchors.margins: root.isSnowing ? root.border.width : Style.marginXL
+        // Rain matches content margins, everything else fills the box
+        anchors.margins: root.isRaining ? Style.marginXL : root.border.width
 
         property var source: ShaderEffectSource {
           sourceItem: content
           hideSource: root.isRaining // Only hide for rain (distortion), show for snow
         }
 
-        property real time: parent.shaderTime
+        // Limit update rate to avoid using too much processing power
+        property real time: parent.shaderTime - (parent.shaderTime % (1 / (root.isRaining ? 3 : root.isSnowing ? 6 : 2)))
         property real itemWidth: weatherEffect.width
         property real itemHeight: weatherEffect.height
         property color bgColor: root.color
-        property real cornerRadius: root.isSnowing ? (root.radius - root.border.width) : 0
+        property real cornerRadius: root.isRaining ? 0 : (root.radius - root.border.width)
+        property real alternative: root.isFoggy
 
-        fragmentShader: root.isSnowing ? Qt.resolvedUrl(Quickshell.shellDir + "/Shaders/qsb/weather_snow.frag.qsb") : Qt.resolvedUrl(Quickshell.shellDir + "/Shaders/qsb/weather_rain.frag.qsb")
+        fragmentShader: {
+          let shaderName;
+          if (root.isSnowing)
+            shaderName = "weather_snow";
+          else if (root.isRaining)
+            shaderName = "weather_rain";
+          else if (root.isCloudy || root.isFoggy)
+            shaderName = "weather_cloud";
+          else if (root.isClearDay)
+            shaderName = "weather_sun";
+          else if (root.isClearNight)
+            shaderName = "weather_stars";
+          else
+            shaderName = "";
+
+          return Qt.resolvedUrl(Quickshell.shellDir + "/Shaders/qsb/" + shaderName + ".frag.qsb");
+        }
       }
     }
   }
@@ -74,6 +97,7 @@ NBox {
     clip: true
 
     RowLayout {
+      visible: weatherReady
       Layout.fillWidth: true
       spacing: Style.marginS
 
@@ -85,11 +109,34 @@ NBox {
         spacing: Style.marginL
         Layout.fillWidth: true
 
-        NIcon {
+        Item {
+          Layout.preferredWidth: mainWeatherIconSide
+          Layout.preferredHeight: mainWeatherIconSide
           Layout.alignment: Qt.AlignVCenter
-          icon: weatherReady ? LocationService.weatherSymbolFromCode(LocationService.data.weather.current_weather.weathercode, LocationService.data.weather.current_weather.is_day) : "weather-cloud-off"
-          pointSize: Style.fontSizeXXXL * 1.75
-          color: Color.mPrimary
+          readonly property int mainWeatherIconSide: Math.round(Style.fontSizeXXXL * 1.75 * Style.uiScaleRatio * 1.6)
+
+          NIcon {
+            visible: !LocationService.taliaWeatherMascotActive
+            anchors.centerIn: parent
+            icon: weatherReady ? LocationService.weatherSymbolFromCode(LocationService.data.weather.current_weather.weathercode) : ""
+            pointSize: Style.fontSizeXXXL * 1.75
+            color: Color.mPrimary
+          }
+          Loader {
+            active: LocationService.taliaWeatherMascotActive
+            anchors.fill: parent
+            asynchronous: true
+            sourceComponent: Component {
+              Image {
+                anchors.fill: parent
+                fillMode: Image.PreserveAspectFit
+                smooth: true
+                mipmap: true
+                asynchronous: true
+                source: Qt.resolvedUrl(LocationService.taliaWeatherImageFromCode(currentWeatherCode))
+              }
+            }
+          }
         }
 
         ColumnLayout {
@@ -107,11 +154,9 @@ NBox {
 
           RowLayout {
             NText {
-              visible: weatherReady
               text: {
-                if (!weatherReady) {
+                if (!weatherReady)
                   return "";
-                }
                 var temp = LocationService.data.weather.current_weather.temperature;
                 var suffix = "C";
                 if (Settings.data.location.useFahrenheit) {
@@ -163,11 +208,34 @@ NBox {
             }
             color: Color.mOnSurface
           }
-          NIcon {
+          Item {
+            Layout.preferredWidth: forecastWeatherIconSide
+            Layout.preferredHeight: forecastWeatherIconSide
             Layout.alignment: Qt.AlignVCenter | Qt.AlignHCenter
-            icon: LocationService.weatherSymbolFromCode(LocationService.data.weather.daily.weathercode[index])
-            pointSize: Style.fontSizeXXL * 1.6
-            color: Color.mPrimary
+            readonly property int forecastWeatherIconSide: Math.round(Style.fontSizeXXL * 1.6 * Style.uiScaleRatio * 1.6)
+
+            NIcon {
+              visible: !LocationService.taliaWeatherMascotActive
+              anchors.centerIn: parent
+              icon: LocationService.weatherSymbolFromCode(LocationService.data.weather.daily.weathercode[index])
+              pointSize: Style.fontSizeXXL * 1.6
+              color: Color.mPrimary
+            }
+            Loader {
+              active: LocationService.taliaWeatherMascotActive
+              anchors.fill: parent
+              asynchronous: true
+              sourceComponent: Component {
+                Image {
+                  anchors.fill: parent
+                  fillMode: Image.PreserveAspectFit
+                  smooth: true
+                  mipmap: true
+                  asynchronous: true
+                  source: Qt.resolvedUrl(LocationService.taliaWeatherImageFromCode(LocationService.data.weather.daily.weathercode[index]))
+                }
+              }
+            }
           }
           NText {
             Layout.alignment: Qt.AlignHCenter
@@ -189,10 +257,23 @@ NBox {
       }
     }
 
-    Loader {
-      active: !weatherReady
+    ColumnLayout {
+      visible: !weatherReady
       Layout.alignment: Qt.AlignCenter
-      sourceComponent: NBusyIndicator {}
+      spacing: Style.marginS
+
+      NBusyIndicator {
+        Layout.alignment: Qt.AlignCenter
+        visible: LocationService.locationConfigured
+      }
+
+      NText {
+        visible: !LocationService.locationConfigured
+        Layout.alignment: Qt.AlignCenter
+        text: I18n.tr("common.weather-no-location")
+        pointSize: Style.fontSizeS
+        color: Color.mOnSurfaceVariant
+      }
     }
   }
 }

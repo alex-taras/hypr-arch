@@ -18,7 +18,7 @@ ColumnLayout {
     currentIndex: tabView.currentIndex
 
     NTabButton {
-      text: I18n.tr("common.general")
+      text: I18n.tr("system-monitor.title")
       tabIndex: 0
       checked: subTabBar.currentIndex === 0
     }
@@ -28,7 +28,7 @@ ColumnLayout {
       checked: subTabBar.currentIndex === 1
     }
     NTabButton {
-      text: I18n.tr("common.polling")
+      text: I18n.tr("common.performance")
       tabIndex: 2
       checked: subTabBar.currentIndex === 2
     }
@@ -47,6 +47,6 @@ ColumnLayout {
       screen: root.screen
     }
     ThresholdsSubTab {}
-    PollingSubTab {}
+    PerformanceSubTab {}
   }
 }

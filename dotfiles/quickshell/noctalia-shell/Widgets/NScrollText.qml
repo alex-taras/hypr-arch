@@ -1,4 +1,5 @@
 import QtQuick
+import QtQuick.Effects
 import QtQuick.Layouts
 import qs.Commons
 
@@ -35,10 +36,17 @@ Item {
   property bool forcedHover: false
   property int cursorShape: Qt.ArrowCursor
 
-  // animation controls
   property real waitBeforeScrolling: 1000
   property real scrollCycleDuration: Math.max(4000, root.text.length * 120)
   property real resettingDuration: 300
+
+  // Stepped marquee: avoids NumberAnimation.Infinite (~every vsync). ~17ms ≈ 60 updates/s.
+  property int scrollTickIntervalMs: 16
+
+  // Fade controls (fadeExtent: 0.0–0.5, fraction of width that fades)
+  property real fadeExtent: 0.1
+  property real fadeCornerRadius: 0
+  property bool fadeRoundLeftCorners: true
 
   readonly property real contentWidth: {
     if (!titleText.item)
@@ -48,9 +56,16 @@ Item {
   }
   readonly property real measuredWidth: scrollContainer.width
 
-  clip: true
   implicitWidth: alwaysMaxWidth ? maxWidth : Math.min(maxWidth, contentWidth)
   implicitHeight: titleText.height
+
+  layer.enabled: contentWidth > maxWidth
+  layer.effect: MultiEffect {
+    maskEnabled: true
+    maskThresholdMin: 0.5
+    maskSpreadAtMin: 1.0
+    maskSource: fadeMask
+  }
 
   enum ScrollState {
     None = 0,
@@ -86,6 +101,22 @@ Item {
     onTriggered: {
       root.state = NScrollText.ScrollState.Scrolling;
       root.updateState();
+    }
+  }
+
+  Timer {
+    id: marqueeTimer
+    interval: root.scrollTickIntervalMs
+    repeat: true
+    running: root.state === NScrollText.ScrollState.Scrolling
+    onTriggered: {
+      const cw = titleText.width + scrollContainer.spacing;
+      if (cw <= 0 || root.scrollCycleDuration <= 0)
+        return;
+      const step = cw * (marqueeTimer.interval / root.scrollCycleDuration);
+      scrollContainer.x -= step;
+      if (scrollContainer.x <= -cw)
+        scrollContainer.x += cw;
     }
   }
 
@@ -161,13 +192,38 @@ Item {
         root.updateState();
       }
     }
+  }
 
-    NumberAnimation on x {
-      running: root.state === NScrollText.ScrollState.Scrolling
-      to: -(titleText.width + scrollContainer.spacing)
-      duration: root.scrollCycleDuration
-      loops: Animation.Infinite
-      easing.type: Easing.Linear
+  // Transparency Fade Rectangle
+  Rectangle {
+    id: fadeMask
+    width: root.width
+    height: root.height
+    topLeftRadius: fadeRoundLeftCorners ? fadeCornerRadius : 0
+    bottomLeftRadius: fadeRoundLeftCorners ? fadeCornerRadius : 0
+    topRightRadius: fadeCornerRadius
+    bottomRightRadius: fadeCornerRadius
+    gradient: Gradient {
+      GradientStop {
+        position: 0.0
+        color: "transparent"
+      }
+      GradientStop {
+        position: fadeExtent
+        color: "white"
+      }
+      GradientStop {
+        position: 1 - fadeExtent
+        color: "white"
+      }
+      GradientStop {
+        position: 1.0
+        color: "transparent"
+      }
+      orientation: Gradient.Horizontal
     }
+    layer.enabled: true
+    layer.smooth: true
+    opacity: 0
   }
 }

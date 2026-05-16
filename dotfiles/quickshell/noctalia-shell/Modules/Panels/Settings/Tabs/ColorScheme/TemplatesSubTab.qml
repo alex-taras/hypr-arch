@@ -13,16 +13,16 @@ ColumnLayout {
   spacing: Style.marginL
   Layout.fillWidth: true
 
+  // Helper to format path description
+  function getDesc(fallbackPath) {
+    return I18n.tr("panels.color-scheme.templates-write-path", {
+                     "filepath": fallbackPath
+                   });
+  }
+
   // Build a combined list of all available templates from TemplateRegistry, sorted alphabetically
   readonly property var allTemplates: {
     var templates = [];
-
-    // Helper to format path description
-    function getDesc(fallbackPath) {
-      return I18n.tr("panels.color-scheme.templates-write-path", {
-                       "filepath": fallbackPath
-                     });
-    }
 
     // Add terminals with category "terminal"
     for (var i = 0; i < TemplateRegistry.terminals.length; i++) {
@@ -47,6 +47,18 @@ ColumnLayout {
           paths.push(app.outputs[k].path);
         }
         path = paths.join("\n");
+      } else if (app.id === "emacs") {
+        // Emacs clients are detected dynamically by ProgramCheckerService
+        var emacsClients = ProgramCheckerService.availableEmacsClients;
+        if (emacsClients && emacsClients.length > 0) {
+          var emacsPaths = [];
+          for (var k = 0; k < emacsClients.length; k++) {
+            emacsPaths.push(emacsClients[k].path);
+          }
+          path = emacsPaths.join("\n");
+        } else {
+          path = I18n.tr("panels.color-scheme.templates-none-detected");
+        }
       } else if (app.clients && app.clients.length > 0) {
         var validClients = [];
         for (var k = 0; k < app.clients.length; k++) {
@@ -56,11 +68,19 @@ ColumnLayout {
           if (app.id === "discord") {
             include = TemplateProcessor.isDiscordClientEnabled(client.name);
           } else if (app.id === "code") {
-            include = TemplateProcessor.isCodeClientEnabled(client.name);
+            // For code clients, resolve all theme paths dynamically (version-independent)
+            if (TemplateProcessor.isCodeClientEnabled(client.name)) {
+              var resolvedPaths = TemplateRegistry.resolvedCodeClientPaths(client.name);
+              for (var p = 0; p < resolvedPaths.length; p++) {
+                validClients.push(resolvedPaths[p]);
+              }
+            }
+            continue;
           }
 
           if (include) {
-            validClients.push(client.path);
+            if (client.path)
+              validClients.push(client.path);
           }
         }
 
@@ -219,7 +239,7 @@ ColumnLayout {
         id: chip
         Layout.fillWidth: true
         Layout.preferredHeight: Math.round(Style.baseWidgetSize * 0.9)
-        radius: height / 2
+        radius: Style.iRadiusM
         color: chipMouse.containsMouse ? Color.mHover : (isActive ? Color.mPrimary : Color.mSurface)
         border.color: isActive ? Color.mPrimary : Color.mOutline
         border.width: Style.borderS
@@ -237,7 +257,7 @@ ColumnLayout {
         NText {
           id: chipText
           anchors.centerIn: parent
-          width: parent.width - Style.marginL * 2
+          width: parent.width - Style.margin2L
           text: chip.modelData.name
           pointSize: Style.fontSizeS
           color: chipMouse.containsMouse ? Color.mOnHover : (isActive ? Color.mOnPrimary : Color.mOnSurface)
@@ -259,7 +279,7 @@ ColumnLayout {
           onClicked: root.toggleTemplate(chip.modelData.id)
           onEntered: {
             if (chip.modelData.tooltip) {
-              TooltipService.show(chip, chip.modelData.tooltip, "auto");
+              TooltipService.show(chip, chip.modelData.tooltip, "bottom");
             }
           }
           onExited: {

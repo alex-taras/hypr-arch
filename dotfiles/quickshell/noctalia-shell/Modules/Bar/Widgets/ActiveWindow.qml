@@ -40,12 +40,15 @@ Item {
 
   // Widget settings - matching MediaMini pattern
   readonly property bool showIcon: (widgetSettings.showIcon !== undefined) ? widgetSettings.showIcon : (widgetMetadata.showIcon || false)
+  readonly property bool showText: (widgetSettings.showText !== undefined) ? widgetSettings.showText : (widgetMetadata.showText || false)
   readonly property string hideMode: (widgetSettings.hideMode !== undefined) ? widgetSettings.hideMode : (widgetMetadata.hideMode || "hidden")
   readonly property string scrollingMode: (widgetSettings.scrollingMode !== undefined) ? widgetSettings.scrollingMode : (widgetMetadata.scrollingMode || "hover")
 
   // Maximum widget width with user settings support
   readonly property real maxWidth: (widgetSettings.maxWidth !== undefined) ? widgetSettings.maxWidth : Math.max(widgetMetadata.maxWidth || 0, screen ? screen.width * 0.06 : 0)
   readonly property bool useFixedWidth: (widgetSettings.useFixedWidth !== undefined) ? widgetSettings.useFixedWidth : (widgetMetadata.useFixedWidth || false)
+  readonly property string textColorKey: (widgetSettings.textColor !== undefined) ? widgetSettings.textColor : widgetMetadata.textColor
+  readonly property color textColor: Color.resolveColorKey(textColorKey)
 
   readonly property string barPosition: Settings.getBarPositionForScreen(screenName)
   readonly property bool isVerticalBar: barPosition === "left" || barPosition === "right"
@@ -91,19 +94,22 @@ Item {
   function calculateContentWidth() {
     // Calculate the actual content width based on visible elements
     var contentWidth = 0;
-    var margins = Style.marginS * 2; // Left and right margins
+    var margins = Style.margin2S; // Left and right margins
 
     // Icon width (if visible)
     if (showIcon) {
       contentWidth += iconSize;
-      contentWidth += Style.marginS; // Spacing after icon
+      if (showText) {
+        contentWidth += Style.marginS; // Spacing after icon
+      }
     }
 
     // Text width (use the measured width)
-    contentWidth += titleContainer.measuredWidth;
-
-    // Additional small margin for text
-    contentWidth += Style.marginXS;
+    if (showText) {
+      contentWidth += titleContainer.measuredWidth;
+      // Additional small margin for text
+      contentWidth += Style.margin2XXS;
+    }
 
     // Add container margins
     contentWidth += margins;
@@ -218,8 +224,7 @@ Item {
       // Horizontal layout for top/bottom bars
       RowLayout {
         id: rowLayout
-        height: iconSize
-        y: Style.pixelAlignCenter(parent.height, height)
+        anchors.verticalCenter: parent.verticalCenter
         spacing: Style.marginS
         visible: !isVerticalBar
         z: 1
@@ -254,10 +259,14 @@ Item {
           id: titleContainer
           text: windowTitle
           Layout.alignment: Qt.AlignVCenter
+          Layout.preferredHeight: root.capsuleHeight
+          fadeRoundLeftCorners: !showIcon
+          visible: showText
+
           maxWidth: {
             // Calculate available width based on other elements
             var iconWidth = (showIcon && windowIcon.visible ? (iconSize + Style.marginS) : 0);
-            var totalMargins = Style.marginXS;
+            var totalMargins = Style.margin2XXS;
             var availableWidth = mainContainer.width - iconWidth - totalMargins;
             return Math.max(20, availableWidth);
           }
@@ -269,12 +278,15 @@ Item {
             return NScrollText.ScrollMode.Never;
           }
           forcedHover: mainMouseArea.containsMouse
+          fadeExtent: 0.1
+          fadeCornerRadius: Style.radiusM
+
           NText {
             text: windowTitle
             pointSize: barFontSize
             applyUiScale: false
             font.weight: Style.fontWeightMedium
-            color: Color.mOnSurface
+            color: root.textColor
           }
         }
       }
@@ -282,8 +294,8 @@ Item {
       // Vertical layout for left/right bars - icon only
       Item {
         id: verticalLayout
-        width: parent.width - Style.marginXL
-        height: parent.height - Style.marginXL
+        width: parent.width - Style.margin2M
+        height: parent.height - Style.margin2M
         x: Style.pixelAlignCenter(parent.width, width)
         y: Style.pixelAlignCenter(parent.height, height)
         visible: isVerticalBar

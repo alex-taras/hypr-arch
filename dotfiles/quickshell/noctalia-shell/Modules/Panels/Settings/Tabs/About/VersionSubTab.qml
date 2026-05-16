@@ -31,21 +31,35 @@ ColumnLayout {
   property string latestVersion: GitHubService.latestVersion
   property string currentVersion: UpdateService.currentVersion
   property string commitInfo: ""
+  property string qsVersion: ""
+  property string qsRevision: ""
 
   readonly property bool isGitVersion: root.currentVersion.endsWith("-git")
-  readonly property int giga: (1024 * 1024 * 1024)
+  readonly property int gigaB: (1024 * 1024 * 1024)
+  readonly property int gigaD: (1000 * 1000 * 1000)
 
-  // Update status: compare versions (strip -git suffix for comparison)
-  readonly property string installedBase: root.currentVersion.replace("-git", "")
+  // Update status: compare versions
   readonly property bool updateAvailable: {
-    if (!root.latestVersion || !root.installedBase)
+    if (!root.latestVersion || !root.currentVersion || root.latestVersion === I18n.tr("common.unknown"))
       return false;
-    return root.latestVersion !== root.installedBase && !root.isGitVersion;
+    return UpdateService.compareVersions(root.latestVersion, root.currentVersion) > 0 && !root.isGitVersion;
   }
   readonly property bool isUpToDate: {
-    if (!root.latestVersion || !root.installedBase)
+    if (!root.latestVersion || !root.currentVersion || root.latestVersion === I18n.tr("common.unknown"))
       return false;
-    return root.latestVersion === root.installedBase;
+    return UpdateService.compareVersions(root.latestVersion, root.currentVersion) <= 0;
+  }
+
+  readonly property bool qsUpdateAvailable: {
+    if (!GitHubService.latestQSVersion || !root.qsVersion || GitHubService.latestQSVersion === I18n.tr("common.unknown"))
+      return false;
+    return UpdateService.compareVersions(GitHubService.latestQSVersion, root.qsVersion) > 0;
+  }
+
+  readonly property bool qsIsUpToDate: {
+    if (!GitHubService.latestQSVersion || !root.qsVersion || GitHubService.latestQSVersion === I18n.tr("common.unknown"))
+      return false;
+    return UpdateService.compareVersions(GitHubService.latestQSVersion, root.qsVersion) <= 0;
   }
 
   // System info properties
@@ -94,9 +108,9 @@ ColumnLayout {
     return {
       instanceId: TelemetryService.getInstanceId(),
       version: UpdateService.currentVersion,
-      compositor: CompositorService.isHyprland ? "Hyprland" : CompositorService.isNiri ? "Niri" : CompositorService.isSway ? "Sway" : CompositorService.isMango ? "MangoWC" : CompositorService.isLabwc ? "LabWC" : "Unknown",
+      compositor: TelemetryService.getCompositorType(),
       os: HostService.osPretty || "Unknown",
-      ramGb: Math.round((root.getModule("Memory")?.result?.total || 0) / root.giga),
+      ramGb: Math.round((root.getModule("Memory")?.result?.total || 0) / root.gigaB),
       monitors: monitors,
       ui: {
         scaleRatio: Settings.data.general.scaleRatio,
@@ -114,12 +128,21 @@ ColumnLayout {
   }
 
   function copyInfoToClipboard() {
-    let info = "Noctalia Shell\n";
-    info += "==============\n";
-    info += "Installed version: " + root.currentVersion + "\n";
+    let info = "Noctalia Shell: " + root.currentVersion;
     if (root.isGitVersion && root.commitInfo) {
-      info += "Git commit: " + root.commitInfo + "\n";
+      info += " (" + root.commitInfo + ")";
     }
+    info += "\n";
+
+    if (root.qsVersion) {
+      let qsV = root.qsVersion.startsWith("v") ? root.qsVersion : "v" + root.qsVersion;
+      info += "Noctalia QS: " + qsV;
+      if (root.qsRevision) {
+        info += " (" + root.qsRevision + ")";
+      }
+      info += "\n";
+    }
+
     info += "\nSystem Information\n";
     info += "==================\n";
     if (root.systemInfo) {
@@ -127,6 +150,7 @@ ColumnLayout {
       const kernel = root.getModule("Kernel");
       const title = root.getModule("Title");
       const product = root.getModule("Host");
+      const board = root.getModule("Board");
       const cpu = root.getModule("CPU");
       const gpu = root.getModule("GPU");
       const mem = root.getModule("Memory");
@@ -135,12 +159,13 @@ ColumnLayout {
       info += "Kernel: " + (kernel?.result?.release || "N/A") + "\n";
       info += "Host: " + (title?.result?.hostName || "N/A") + "\n";
       info += "Product: " + (product?.result?.name || "N/A") + "\n";
+      info += "Board: " + (board?.result?.name || "N/A") + "\n";
       info += "CPU: " + (cpu?.result?.cpu || "N/A") + "\n";
       if (gpu?.result && Array.isArray(gpu.result) && gpu.result.length > 0) {
         info += "GPU: " + gpu.result.map(g => g.name || "Unknown").join(", ") + "\n";
       }
       if (mem?.result) {
-        info += "Memory: " + SystemStatService.formatMemoryGb(mem.result.total / root.giga) + "\n";
+        info += "Memory: " + (mem.result.total / root.gigaB).toFixed(1) + " GB \n";
       }
       if (wm?.result) {
         info += "WM: " + (wm.result.prettyName || wm.result.processName || "N/A") + "\n";
@@ -162,6 +187,7 @@ ColumnLayout {
   Component.onCompleted: {
     // Check if fastfetch is available before trying to run it
     checkFastfetchProcess.running = true;
+    qsVersionProcess.running = true;
 
     Logger.d("VersionSubTab", "Current version:", root.currentVersion);
     Logger.d("VersionSubTab", "Is git version:", root.isGitVersion);
@@ -184,88 +210,9 @@ ColumnLayout {
             Logger.d("VersionSubTab", "Component.onCompleted - Could not extract commit from NixOS path, trying fallback");
           }
         }
-        fetchGitCommit();
-        return;
-      } else {
-        // On non-NixOS systems, check for pacman first.
-        whichPacmanProcess.running = true;
-        return;
       }
+      fetchGitCommit();
     }
-  }
-
-  Timer {
-    id: gitFallbackTimer
-    interval: 500
-    running: false
-    onTriggered: {
-      if (!root.commitInfo) {
-        fetchGitCommit();
-      }
-    }
-  }
-
-  Process {
-    id: whichPacmanProcess
-    command: ["sh", "-c", "command -v pacman"]
-    running: false
-    onExited: function (exitCode) {
-      if (exitCode === 0) {
-        Logger.d("VersionSubTab", "whichPacmanProcess - pacman found, starting query");
-        pacmanProcess.running = true;
-        gitFallbackTimer.start();
-      } else {
-        Logger.d("VersionSubTab", "whichPacmanProcess - pacman not found, falling back to git");
-        fetchGitCommit();
-      }
-    }
-  }
-
-  Process {
-    id: pacmanProcess
-    command: ["pacman", "-Q", "noctalia-shell-git"]
-    running: false
-
-    onStarted: {
-      gitFallbackTimer.stop();
-    }
-
-    onExited: function (exitCode) {
-      gitFallbackTimer.stop();
-      Logger.d("VersionSubTab", "pacmanProcess - Process exited with code:", exitCode);
-      if (exitCode === 0) {
-        var output = stdout.text.trim();
-        Logger.d("VersionSubTab", "pacmanProcess - Output:", output);
-        var match = output.match(/noctalia-shell-git\s+(.+)/);
-        if (match && match[1]) {
-          // For Arch packages, the version format might be like: 3.4.0.r112.g3f00bec8-1
-          // Extract just the commit hash part if it exists
-          var version = match[1];
-          var commitMatch = version.match(/\.g([0-9a-f]{7,})/i);
-          if (commitMatch && commitMatch[1]) {
-            // Show short hash (first 7 characters)
-            root.commitInfo = commitMatch[1].substring(0, 7);
-            Logger.d("VersionSubTab", "pacmanProcess - Set commitInfo from Arch package:", root.commitInfo);
-            return; // Successfully got commit hash from Arch package
-          } else {
-            // If no commit hash in version format, still try git repo
-            Logger.d("VersionSubTab", "pacmanProcess - No commit hash in version, trying git");
-            fetchGitCommit();
-          }
-        } else {
-          // Unexpected output format, try git
-          Logger.d("VersionSubTab", "pacmanProcess - Unexpected output format, trying git");
-          fetchGitCommit();
-        }
-      } else {
-        // If not on Arch, try to get git commit from repository
-        Logger.d("VersionSubTab", "pacmanProcess - Package not found, trying git");
-        fetchGitCommit();
-      }
-    }
-
-    stdout: StdioCollector {}
-    stderr: StdioCollector {}
   }
 
   function fetchGitCommit() {
@@ -303,6 +250,29 @@ ColumnLayout {
     stderr: StdioCollector {}
   }
 
+  Process {
+    id: qsVersionProcess
+    command: ["qs", "--version"]
+    running: false
+
+    onExited: function (exitCode) {
+      if (exitCode === 0) {
+        var output = stdout.text.trim();
+        // Format (old): "noctalia-qs 0.3.0, revision abc12345, distributed by: ..."
+        // Format (new): "noctalia-qs 0.0.9 (revision b602b69c81d96a1d7c645328feb7b1e1d4b7b7a4, distributed by Unset)"
+        // Only set if this is actually noctalia-qs; leave empty for upstream quickshell
+        var match = output.match(/noctalia-qs\s+(\S+?)[\s,(]+revision\s*([0-9a-f]*)/i);
+        if (match) {
+          root.qsVersion = match[1];
+          root.qsRevision = match[2] ? match[2].substring(0, 9) : "";
+        }
+      }
+    }
+
+    stdout: StdioCollector {}
+    stderr: StdioCollector {}
+  }
+
   // Check if fastfetch is available before attempting to run it
   Process {
     id: checkFastfetchProcess
@@ -328,7 +298,7 @@ ColumnLayout {
 
   Process {
     id: fastfetchProcess
-    command: ["fastfetch", "--format", "json", "--config", "none"]
+    command: ["fastfetch", "--format", "json", "--config", Quickshell.shellDir + "/Assets/Services/fastfetch/system-info.jsonc"]
     running: false
 
     onExited: function (exitCode) {
@@ -365,12 +335,47 @@ ColumnLayout {
       mipmap: true
       smooth: true
       Layout.alignment: Qt.AlignBottom
+      rotation: Settings.isDebug ? 180 : 0
+
+      Behavior on rotation {
+        NumberAnimation {
+          duration: Style.animationSlowest
+          easing.type: Easing.OutBack
+        }
+      }
+
+      property int debugTapCount: 0
+
+      Timer {
+        id: debugTapTimer
+        interval: 5000
+        onTriggered: parent.debugTapCount = 0
+      }
+
+      MouseArea {
+        anchors.fill: parent
+        onClicked: {
+          if (parent.debugTapCount === 0) {
+            debugTapTimer.restart();
+          }
+          parent.debugTapCount++;
+          if (parent.debugTapCount >= 8) {
+            parent.debugTapCount = 0;
+            debugTapTimer.stop();
+            Settings.isDebug = !Settings.isDebug;
+            if (Settings.isDebug) {
+              ToastService.showNotice("Debug", I18n.tr("panels.about.debug-enabled"));
+            } else {
+              ToastService.showNotice("Debug", I18n.tr("panels.about.debug-disabled"));
+            }
+          }
+        }
+      }
     }
 
     ColumnLayout {
       NHeader {
-        label: I18n.tr("panels.about.noctalia-title")
-        // description: I18n.tr("panels.about.noctalia-desc")
+        label: "Noctalia Shell"
       }
 
       // Versions
@@ -379,20 +384,9 @@ ColumnLayout {
         rowSpacing: Style.marginXS
         columnSpacing: Style.marginM
 
+        // Installed Version (Shell)
         NText {
-          text: I18n.tr("panels.about.noctalia-latest-version")
-          color: Color.mOnSurfaceVariant
-          Layout.alignment: Qt.AlignRight | Qt.AlignVCenter
-        }
-
-        NText {
-          text: root.latestVersion
-          color: Color.mOnSurface
-          font.weight: Style.fontWeightBold
-        }
-
-        NText {
-          text: I18n.tr("panels.about.noctalia-installed-version")
+          text: "Noctalia Shell:"
           color: Color.mOnSurfaceVariant
           Layout.alignment: Qt.AlignRight | Qt.AlignVCenter
         }
@@ -404,6 +398,34 @@ ColumnLayout {
             text: root.currentVersion
             color: Color.mOnSurface
             font.weight: Style.fontWeightBold
+          }
+
+          // Git commit in parentheses
+          NText {
+            id: commitText
+            visible: root.isGitVersion
+            text: "(" + (root.commitInfo || I18n.tr("common.loading")) + ")"
+            color: commitMouseArea.containsMouse ? Color.mPrimary : Color.mOnSurfaceVariant
+            pointSize: Style.fontSizeXS
+            font.underline: commitMouseArea.containsMouse && root.commitInfo
+
+            MouseArea {
+              id: commitMouseArea
+              anchors.fill: parent
+              hoverEnabled: true
+              cursorShape: root.commitInfo ? Qt.PointingHandCursor : Qt.ArrowCursor
+              onEntered: {
+                if (root.commitInfo) {
+                  TooltipService.show(commitText, I18n.tr("panels.about.view-commit"));
+                }
+              }
+              onExited: TooltipService.hide()
+              onClicked: {
+                if (root.commitInfo) {
+                  Quickshell.execDetached(["xdg-open", "https://github.com/noctalia-dev/noctalia-shell/commit/" + root.commitInfo]);
+                }
+              }
+            }
           }
 
           // Update status indicator
@@ -438,77 +460,169 @@ ColumnLayout {
           }
         }
 
+        // Latest Version (Shell)
         NText {
-          visible: root.isGitVersion
-          text: I18n.tr("panels.about.noctalia-git-commit")
+          visible: root.updateAvailable
+          text: I18n.tr("panels.about.noctalia-available")
           color: Color.mOnSurfaceVariant
           Layout.alignment: Qt.AlignRight | Qt.AlignVCenter
         }
 
-        // Clickable git commit
         NText {
-          id: commitText
-          visible: root.isGitVersion
-          text: root.commitInfo || I18n.tr("common.loading")
-          color: root.commitInfo ? Color.mPrimary : Color.mOnSurface
-          pointSize: Style.fontSizeXS
-          font.underline: commitMouseArea.containsMouse && root.commitInfo
+          visible: root.updateAvailable
+          text: root.latestVersion
+          color: Color.mOnSurface
+          font.weight: Style.fontWeightBold
+        }
 
-          MouseArea {
-            id: commitMouseArea
-            anchors.fill: parent
-            hoverEnabled: true
-            cursorShape: root.commitInfo ? Qt.PointingHandCursor : Qt.ArrowCursor
-            onEntered: {
-              if (root.commitInfo) {
-                TooltipService.show(commitText, I18n.tr("panels.about.view-commit"));
-              }
-            }
-            onExited: TooltipService.hide()
-            onClicked: {
-              if (root.commitInfo) {
-                Quickshell.execDetached(["xdg-open", "https://github.com/noctalia-dev/noctalia-shell/commit/" + root.commitInfo]);
+        // Divider-like spacing
+        Item {
+          visible: root.qsUpdateAvailable || root.updateAvailable
+          Layout.columnSpan: 2
+          Layout.preferredHeight: Style.marginXS
+        }
+
+        // Quickshell Version
+        NText {
+          visible: root.qsVersion !== ""
+          text: "Noctalia QS:"
+          color: Color.mOnSurfaceVariant
+          Layout.alignment: Qt.AlignRight | Qt.AlignVCenter
+        }
+
+        RowLayout {
+          visible: root.qsVersion !== ""
+          spacing: Style.marginS
+
+          NText {
+            text: root.qsVersion.startsWith("v") ? root.qsVersion : "v" + root.qsVersion
+            color: Color.mOnSurface
+            font.weight: Style.fontWeightBold
+          }
+
+          // Git revision in parentheses
+          NText {
+            id: qsRevisionText
+            visible: root.qsRevision !== ""
+            text: "(" + root.qsRevision + ")"
+            color: qsRevisionMouseArea.containsMouse ? Color.mPrimary : Color.mOnSurfaceVariant
+            pointSize: Style.fontSizeXS
+            font.underline: qsRevisionMouseArea.containsMouse
+
+            MouseArea {
+              id: qsRevisionMouseArea
+              anchors.fill: parent
+              hoverEnabled: true
+              cursorShape: Qt.PointingHandCursor
+              onEntered: TooltipService.show(qsRevisionText, I18n.tr("panels.about.view-commit"))
+              onExited: TooltipService.hide()
+              onClicked: {
+                Quickshell.execDetached(["xdg-open", "https://github.com/noctalia-dev/noctalia-qs/commit/" + root.qsRevision]);
               }
             }
           }
+
+          // Update status indicator
+          NIcon {
+            id: qsUpToDateIcon
+            visible: root.qsIsUpToDate
+            icon: "circle-check"
+            pointSize: Style.fontSizeM
+            color: Color.mPrimary
+
+            MouseArea {
+              anchors.fill: parent
+              hoverEnabled: true
+              onEntered: TooltipService.show(qsUpToDateIcon, I18n.tr("panels.about.up-to-date"))
+              onExited: TooltipService.hide()
+            }
+          }
+
+          NIcon {
+            id: qsUpdateAvailableIcon
+            visible: root.qsUpdateAvailable
+            icon: "arrow-up-circle"
+            pointSize: Style.fontSizeS
+            color: Color.mPrimary
+
+            MouseArea {
+              anchors.fill: parent
+              hoverEnabled: true
+              onEntered: TooltipService.show(qsUpdateAvailableIcon, I18n.tr("panels.about.update-available"))
+              onExited: TooltipService.hide()
+            }
+          }
+        }
+
+        // Latest Quickshell Version
+        NText {
+          visible: root.qsUpdateAvailable
+          text: I18n.tr("panels.about.noctalia-available")
+          color: Color.mOnSurfaceVariant
+          Layout.alignment: Qt.AlignRight | Qt.AlignVCenter
+        }
+
+        NText {
+          visible: root.qsUpdateAvailable
+          text: GitHubService.latestQSVersion
+          color: Color.mOnSurface
+          font.weight: Style.fontWeightBold
         }
       }
     }
   }
 
-  // Action buttons row
-  RowLayout {
+  GridLayout {
+    id: actionsGrid
     Layout.alignment: Qt.AlignHCenter
     Layout.topMargin: Style.marginM
     Layout.bottomMargin: Style.marginM
-    spacing: Style.marginM
+    rowSpacing: Style.marginM
+    columnSpacing: Style.marginM
+
+    columns: (changelogBtn.implicitWidth + copyBtn.implicitWidth + supportBtn.implicitWidth + 2 * columnSpacing) < root.width ? 3 : 1
 
     NButton {
+      id: changelogBtn
       icon: "sparkles"
       text: I18n.tr("panels.about.changelog")
       outlined: true
+      Layout.alignment: Qt.AlignHCenter
       onClicked: {
-        var screen = PanelService.openedPanel?.screen || Quickshell.screens[0];
+        var screen = PanelService.openedPanel?.screen || SettingsPanelService.settingsWindow?.screen || PanelService.findScreenForPanels();
+        SettingsPanelService.close(screen);
         UpdateService.viewChangelog(screen);
       }
     }
 
     NButton {
+      id: copyBtn
       icon: "copy"
       text: I18n.tr("panels.about.copy-info")
       outlined: true
+      Layout.alignment: Qt.AlignHCenter
       onClicked: root.copyInfoToClipboard()
     }
 
     NButton {
+      id: supportBtn
       icon: "heart"
       text: I18n.tr("panels.about.support")
       outlined: true
+      Layout.alignment: Qt.AlignHCenter
       onClicked: {
         Quickshell.execDetached(["xdg-open", "https://buymeacoffee.com/noctalia"]);
-        ToastService.showNotice(I18n.tr("panels.about.support"), I18n.tr("toast.kofi-opened"));
+        ToastService.showNotice(I18n.tr("panels.about.support"), I18n.tr("toast.donation-opened"));
       }
     }
+  }
+
+  NToggle {
+    Layout.fillWidth: true
+    label: I18n.tr("panels.about.changelog-on-startup")
+    description: I18n.tr("panels.about.changelog-on-startup-desc")
+    checked: Settings.data.general.showChangelogOnStartup
+    onToggled: checked => Settings.data.general.showChangelogOnStartup = checked
   }
 
   // System Information Section
@@ -617,6 +731,23 @@ ColumnLayout {
       wrapMode: Text.Wrap
     }
 
+    // Board name
+    NText {
+      text: I18n.tr("panels.about.system-board")
+      color: Color.mOnSurfaceVariant
+      pointSize: sysInfo.textSize
+    }
+    NText {
+      text: {
+        const title = root.getModule("Board");
+        return title?.result?.name || "N/A";
+      }
+      color: Color.mOnSurface
+      pointSize: sysInfo.textSize
+      Layout.fillWidth: true
+      wrapMode: Text.Wrap
+    }
+
     // Uptime
     NText {
       text: I18n.tr("panels.about.system-uptime")
@@ -688,9 +819,9 @@ ColumnLayout {
         const mem = root.getModule("Memory");
         if (!mem?.result)
           return "N/A";
-        const used = SystemStatService.formatMemoryGb(mem.result.used / root.giga);
-        const total = SystemStatService.formatMemoryGb(mem.result.total / root.giga);
-        return used + " / " + total;
+        const used = (mem.result.used / root.gigaB).toFixed(1);
+        const total = (mem.result.total / root.gigaB).toFixed(1);
+        return used + " GiB / " + total + " GiB";
       }
       color: Color.mOnSurface
       pointSize: sysInfo.textSize
@@ -712,9 +843,9 @@ ColumnLayout {
         const rootDisk = disk.result.find(d => d.mountpoint === "/");
         if (!rootDisk?.bytes)
           return "N/A";
-        const used = SystemStatService.formatMemoryGb(rootDisk.bytes.used / root.giga);
-        const total = SystemStatService.formatMemoryGb(rootDisk.bytes.total / root.giga);
-        return used + " / " + total + " (" + rootDisk.filesystem + ")";
+        const used = (rootDisk.bytes.used / root.gigaD).toFixed(1);
+        const total = (rootDisk.bytes.total / root.gigaD).toFixed(1);
+        return used + " GB / " + total + " GB" + " (" + rootDisk.filesystem + ")";
       }
       color: Color.mOnSurface
       pointSize: sysInfo.textSize

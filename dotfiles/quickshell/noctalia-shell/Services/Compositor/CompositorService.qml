@@ -16,6 +16,8 @@ Singleton {
   property bool isSway: false
   property bool isMango: false
   property bool isLabwc: false
+  property bool isExtWorkspace: false
+  property bool isScroll: false
 
   // Generic workspace and window data
   property ListModel workspaces: ListModel {}
@@ -28,6 +30,10 @@ Singleton {
 
   // Overview state (Niri-specific, defaults to false for other compositors)
   property bool overviewActive: false
+
+  // Global workspaces flag (workspaces shared across all outputs)
+  // True for LabWC (stacking compositor), false for tiling WMs with per-output workspaces
+  property bool globalWorkspaces: false
 
   // Generic events
   signal workspaceChanged
@@ -72,6 +78,7 @@ Singleton {
       isSway = false;
       isMango = true;
       isLabwc = false;
+      isExtWorkspace = false;
       backendLoader.sourceComponent = mangoComponent;
     } else if (labwcPid && labwcPid.length > 0) {
       isHyprland = false;
@@ -79,6 +86,7 @@ Singleton {
       isSway = false;
       isMango = false;
       isLabwc = true;
+      isExtWorkspace = false;
       backendLoader.sourceComponent = labwcComponent;
       Logger.i("CompositorService", "Detected LabWC with PID: " + labwcPid);
     } else if (niriSocket && niriSocket.length > 0) {
@@ -87,6 +95,7 @@ Singleton {
       isSway = false;
       isMango = false;
       isLabwc = false;
+      isExtWorkspace = false;
       backendLoader.sourceComponent = niriComponent;
     } else if (hyprlandSignature && hyprlandSignature.length > 0) {
       isHyprland = true;
@@ -94,6 +103,7 @@ Singleton {
       isSway = false;
       isMango = false;
       isLabwc = false;
+      isExtWorkspace = false;
       backendLoader.sourceComponent = hyprlandComponent;
     } else if (swaySock && swaySock.length > 0) {
       isHyprland = false;
@@ -101,15 +111,19 @@ Singleton {
       isSway = true;
       isMango = false;
       isLabwc = false;
+      isExtWorkspace = false;
+      isScroll = currentDesktop && currentDesktop.toLowerCase().includes("scroll");
       backendLoader.sourceComponent = swayComponent;
     } else {
-      // Always fallback to Niri
+      // Always fallback to ext-workspace-v1
       isHyprland = false;
-      isNiri = true;
+      isNiri = false;
       isSway = false;
       isMango = false;
       isLabwc = false;
-      backendLoader.sourceComponent = niriComponent;
+      isExtWorkspace = true;
+      backendLoader.sourceComponent = extWorkspaceComponent;
+      Logger.i("CompositorService", "Using generic ext-workspace backend (no recognized compositor env)");
     }
   }
 
@@ -117,6 +131,9 @@ Singleton {
     id: backendLoader
     onLoaded: {
       if (item) {
+        if (isScroll) {
+          item.msgCommand = "scrollmsg";
+        }
         root.backend = item;
         setupBackendConnections();
         backend.initialize();
@@ -182,6 +199,14 @@ Singleton {
     }
   }
 
+  // Generic ext-workspace (WindowManager) when compositor env is unknown
+  Component {
+    id: extWorkspaceComponent
+    ExtWorkspaceService {
+      id: extWorkspaceBackend
+    }
+  }
+
   function setupBackendConnections() {
     if (!backend)
       return;
@@ -202,10 +227,7 @@ Singleton {
                                         });
 
     backend.windowListChanged.connect(() => {
-                                        // Sync windows when they change
                                         syncWindows();
-                                        // Forward the signal
-                                        windowListChanged();
                                       });
 
     // Property bindings - use automatic property change signal
@@ -226,6 +248,9 @@ Singleton {
     focusedWindowIndex = backend.focusedWindowIndex;
     if (backend.overviewActive !== undefined) {
       overviewActive = backend.overviewActive;
+    }
+    if (backend.globalWorkspaces !== undefined) {
+      globalWorkspaces = backend.globalWorkspaces;
     }
   }
 
@@ -278,7 +303,6 @@ Singleton {
   function onDisplayScalesUpdated(scales) {
     displayScales = scales;
     saveDisplayScalesToCache();
-    displayScalesChanged();
     Logger.d("CompositorService", "Display scales updated");
   }
 
@@ -349,7 +373,16 @@ Singleton {
     for (var i = 0; i < windows.count; i++) {
       var window = windows.get(i);
       if (window.workspaceId === workspaceId) {
-        windowsInWs.push(window);
+        // Snapshot to plain JS object so callers never hold live ListModel
+        // proxies that become invalid when syncWindows() clears the model.
+        windowsInWs.push({
+                           id: window.id,
+                           title: window.title,
+                           appId: window.appId,
+                           isFocused: window.isFocused,
+                           workspaceId: window.workspaceId,
+                           handle: window.handle
+                         });
       }
     }
     return windowsInWs;
@@ -361,6 +394,13 @@ Singleton {
       backend.switchToWorkspace(workspace);
     } else {
       Logger.w("Compositor", "No backend available for workspace switching");
+    }
+  }
+
+  // Scrollable workspace content (Niri)
+  function scrollWorkspaceContent(direction) {
+    if (backend && backend.scrollWorkspaceContent) {
+      backend.scrollWorkspaceContent(direction);
     }
   }
 
@@ -405,10 +445,52 @@ Singleton {
     }
   }
 
+  // Spawn command
+  function spawn(command) {
+    // Ensure command is a proper JS array (QML lists can behave unexpectedly in some contexts)
+    const cmdArray = Array.isArray(command) ? command : (command && typeof command === "object" && command.length !== undefined) ? Array.from(command) : [command];
+
+    Logger.d("CompositorService", `Spawning: ${cmdArray.join(" ")}`);
+    if (backend && backend.spawn) {
+      backend.spawn(cmdArray);
+    } else {
+      try {
+        Quickshell.execDetached(cmdArray);
+      } catch (e) {
+        Logger.e("CompositorService", "Failed to execute detached:", e);
+      }
+    }
+  }
+
+  // Session management helper for custom commands
+  function getCustomCommand(action) {
+    const powerOptions = Settings.data.sessionMenu.powerOptions || [];
+    for (let i = 0; i < powerOptions.length; i++) {
+      const option = powerOptions[i];
+      if (option.action === action && option.enabled && option.command && option.command.trim() !== "") {
+        return option.command.trim();
+      }
+    }
+    return "";
+  }
+
+  function executeSessionAction(action, defaultCommand) {
+    const customCommand = getCustomCommand(action);
+    if (customCommand) {
+      Logger.i("Compositor", `Executing custom command for action: ${action} Command: ${customCommand}`);
+      Quickshell.execDetached(["sh", "-c", customCommand]);
+      return true;
+    }
+    return false;
+  }
+
   // Session management
   function logout() {
+    Logger.i("Compositor", "Logout requested");
+    if (executeSessionAction("logout"))
+      return;
+
     if (backend && backend.logout) {
-      Logger.i("Compositor", "Logout requested");
       backend.logout();
     } else {
       Logger.w("Compositor", "No backend available for logout");
@@ -417,6 +499,9 @@ Singleton {
 
   function shutdown() {
     Logger.i("Compositor", "Shutdown requested");
+    if (executeSessionAction("shutdown"))
+      return;
+
     HooksService.executeSessionHook("shutdown", () => {
                                       Quickshell.execDetached(["sh", "-c", "systemctl poweroff || loginctl poweroff"]);
                                     });
@@ -424,18 +509,75 @@ Singleton {
 
   function reboot() {
     Logger.i("Compositor", "Reboot requested");
+    if (executeSessionAction("reboot"))
+      return;
+
     HooksService.executeSessionHook("reboot", () => {
                                       Quickshell.execDetached(["sh", "-c", "systemctl reboot || loginctl reboot"]);
                                     });
   }
 
+  function userspaceReboot() {
+    Logger.i("Compositor", "Userspace reboot requested");
+    if (executeSessionAction("userspaceReboot"))
+      return;
+
+    HooksService.executeSessionHook("userspaceReboot", () => {
+                                      Quickshell.execDetached(["sh", "-c", "systemctl soft-reboot"]);
+                                    });
+  }
+
+  function rebootToUefi() {
+    Logger.i("Compositor", "Reboot to UEFI firmware requested requested");
+    if (executeSessionAction("rebootToUefi"))
+      return;
+
+    HooksService.executeSessionHook("rebootToUefi", () => {
+                                      Quickshell.execDetached(["sh", "-c", "systemctl reboot --firmware-setup || loginctl reboot --firmware-setup"]);
+                                    });
+  }
+
+  function turnOffMonitors() {
+    Logger.i("Compositor", "Turn off monitors requested");
+    if (backend && backend.turnOffMonitors) {
+      backend.turnOffMonitors();
+    } else {
+      Logger.w("Compositor", "No backend available for turnOffMonitors");
+    }
+  }
+
+  function turnOnMonitors() {
+    Logger.i("Compositor", "Turn on monitors requested");
+    if (backend && backend.turnOnMonitors) {
+      backend.turnOnMonitors();
+    } else {
+      Logger.w("Compositor", "No backend available for turnOnMonitors");
+    }
+  }
+
   function suspend() {
     Logger.i("Compositor", "Suspend requested");
+    if (executeSessionAction("suspend"))
+      return;
+
     Quickshell.execDetached(["sh", "-c", "systemctl suspend || loginctl suspend"]);
+  }
+
+  function lock() {
+    Logger.i("Compositor", "LockScreen requested");
+    if (executeSessionAction("lock"))
+      return;
+
+    if (PanelService && PanelService.lockScreen) {
+      PanelService.lockScreen.active = true;
+    }
   }
 
   function hibernate() {
     Logger.i("Compositor", "Hibernate requested");
+    if (executeSessionAction("hibernate"))
+      return;
+
     Quickshell.execDetached(["sh", "-c", "systemctl hibernate || loginctl hibernate"]);
   }
 
@@ -449,6 +591,12 @@ Singleton {
 
   function lockAndSuspend() {
     Logger.i("Compositor", "Lock and suspend requested");
+
+    // if a custom lock command exists, execute it and suspend without wait
+    if (executeSessionAction("lock")) {
+      suspend();
+      return;
+    }
 
     // If already locked, suspend immediately
     if (PanelService && PanelService.lockScreen && PanelService.lockScreen.active) {

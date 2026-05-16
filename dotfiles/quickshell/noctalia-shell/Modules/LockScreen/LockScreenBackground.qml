@@ -1,7 +1,9 @@
 import QtQuick
+import QtQuick.Effects
 import Quickshell
 import qs.Commons
 import qs.Services.Compositor
+import qs.Services.Power
 import qs.Services.UI
 
 Item {
@@ -10,6 +12,7 @@ Item {
 
   // Cached wallpaper path - exposed for parent components
   property string resolvedWallpaperPath: ""
+  property color tintColor: Settings.data.colorSchemes.darkMode ? Color.mSurface : Color.mOnSurface
 
   required property var screen
 
@@ -108,7 +111,7 @@ Item {
 
   Image {
     id: lockBgImage
-    visible: source !== "" && Settings.data.wallpaper.enabled && !Settings.data.wallpaper.useSolidColor
+    visible: source !== "" && Settings.data.wallpaper.enabled && !Settings.data.wallpaper.useSolidColor && (!PowerProfileService.noctaliaPerformanceMode || !Settings.data.noctaliaPerformance.disableWallpaper)
     anchors.fill: parent
     fillMode: Image.PreserveAspectCrop
     source: resolvedWallpaperPath
@@ -116,6 +119,21 @@ Item {
     smooth: true
     mipmap: false
     antialiasing: true
+
+    layer.enabled: Settings.data.general.lockScreenBlur > 0 && !PowerProfileService.noctaliaPerformanceMode
+    layer.smooth: false
+    layer.effect: MultiEffect {
+      blurEnabled: true
+      blur: Settings.data.general.lockScreenBlur
+      blurMax: 48
+    }
+
+    // Tint overlay
+    Rectangle {
+      anchors.fill: parent
+      color: root.tintColor
+      opacity: Settings.data.general.lockScreenTint
+    }
   }
 
   Rectangle {
@@ -124,19 +142,19 @@ Item {
     gradient: Gradient {
       GradientStop {
         position: 0.0
-        color: Qt.alpha(Color.mShadow, 0.8)
-      }
-      GradientStop {
-        position: 0.3
         color: Qt.alpha(Color.mShadow, 0.4)
       }
       GradientStop {
+        position: 0.3
+        color: Qt.alpha(Color.mShadow, 0.2)
+      }
+      GradientStop {
         position: 0.7
-        color: Qt.alpha(Color.mShadow, 0.5)
+        color: Qt.alpha(Color.mShadow, 0.25)
       }
       GradientStop {
         position: 1.0
-        color: Qt.alpha(Color.mShadow, 0.9)
+        color: Qt.alpha(Color.mShadow, 0.5)
       }
     }
   }

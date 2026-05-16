@@ -8,8 +8,19 @@ import qs.Commons
 Singleton {
   id: root
 
+  Component.onCompleted: {
+    if (Settings.data.templates.enableUserTheming)
+    writeUserTemplatesToml();
+  }
+
   readonly property string templateApplyScript: Quickshell.shellDir + '/Scripts/bash/template-apply.sh'
   readonly property string gtkRefreshScript: Quickshell.shellDir + '/Scripts/python/src/theming/gtk-refresh.py'
+  readonly property string kdeApplyScript: Quickshell.shellDir + '/Scripts/python/src/theming/kde-apply-scheme.py'
+  readonly property string vscodeHelperScript: Quickshell.shellDir + '/Scripts/python/src/theming/vscode-helper.py'
+
+  // Dynamically resolved VSCode extension theme paths (all matching noctalia extensions)
+  property var resolvedCodePaths: []
+  property var resolvedCodiumPaths: []
 
   // Terminal configurations (for wallpaper-based templates)
   // Each terminal must define a postHook that sets up config includes and triggers reload
@@ -18,6 +29,7 @@ Singleton {
       "id": "foot",
       "name": "Foot",
       "templatePath": "terminal/foot",
+      "predefinedTemplatePath": "terminal/foot-predefined",
       "outputPath": "~/.config/foot/themes/noctalia",
       "postHook": `${templateApplyScript} foot`
     },
@@ -25,6 +37,7 @@ Singleton {
       "id": "ghostty",
       "name": "Ghostty",
       "templatePath": "terminal/ghostty",
+      "predefinedTemplatePath": "terminal/ghostty-predefined",
       "outputPath": "~/.config/ghostty/themes/noctalia",
       "postHook": `${templateApplyScript} ghostty`
     },
@@ -32,6 +45,7 @@ Singleton {
       "id": "kitty",
       "name": "Kitty",
       "templatePath": "terminal/kitty.conf",
+      "predefinedTemplatePath": "terminal/kitty-predefined.conf",
       "outputPath": "~/.config/kitty/themes/noctalia.conf",
       "postHook": `${templateApplyScript} kitty`
     },
@@ -39,6 +53,7 @@ Singleton {
       "id": "alacritty",
       "name": "Alacritty",
       "templatePath": "terminal/alacritty.toml",
+      "predefinedTemplatePath": "terminal/alacritty-predefined.toml",
       "outputPath": "~/.config/alacritty/themes/noctalia.toml",
       "postHook": `${templateApplyScript} alacritty`
     },
@@ -46,8 +61,17 @@ Singleton {
       "id": "wezterm",
       "name": "Wezterm",
       "templatePath": "terminal/wezterm.toml",
+      "predefinedTemplatePath": "terminal/wezterm-predefined.toml",
       "outputPath": "~/.config/wezterm/colors/Noctalia.toml",
       "postHook": `${templateApplyScript} wezterm`
+    },
+    {
+      "id": "starship",
+      "name": "Starship",
+      "templatePath": "terminal/starship.toml",
+      "predefinedTemplatePath": "terminal/starship-predefined.toml",
+      "outputPath": "~/.cache/noctalia/starship-palette.toml",
+      "postHook": `${templateApplyScript} starship`
     }
   ]
 
@@ -57,16 +81,18 @@ Singleton {
       "id": "gtk",
       "name": "GTK",
       "category": "system",
-      "input": "gtk.css",
+      "input": "gtk4.css",
       "outputs": [
         {
-          "path": "~/.config/gtk-3.0/noctalia.css"
+          "path": "~/.config/gtk-3.0/noctalia.css",
+          "input": "gtk3.css"
         },
         {
-          "path": "~/.config/gtk-4.0/noctalia.css"
+          "path": "~/.config/gtk-4.0/noctalia.css",
+          "input": "gtk4.css"
         }
       ],
-      "postProcess": mode => `gsettings set org.gnome.desktop.interface color-scheme prefer-${mode} && python3 ${gtkRefreshScript}`
+      "postProcess": mode => `python3 ${gtkRefreshScript} ${mode}`
     },
     {
       "id": "qt",
@@ -91,7 +117,8 @@ Singleton {
         {
           "path": "~/.local/share/color-schemes/noctalia.colors"
         }
-      ]
+      ],
+      "postProcess": () => `${kdeApplyScript} noctalia`
     },
     {
       "id": "fuzzel",
@@ -182,6 +209,10 @@ Singleton {
           "path": "~/.config/Vencord"
         },
         {
+          "name": "vencord-flatpak",
+          "path": "~/.var/app/com.discordapp.Discord/config/Vencord"
+        },
+        {
           "name": "betterdiscord",
           "path": "~/.config/BetterDiscord"
         }
@@ -264,7 +295,7 @@ Singleton {
         }
       ],
       "postProcess": ()
-                     => "sh -c 'CSS_CHROME=\"$HOME/.cache/noctalia/zen-browser/zen-userChrome.css\"; CSS_CONTENT=\"$HOME/.cache/noctalia/zen-browser/zen-userContent.css\"; LINE_CHROME=\"@import \\\"$CSS_CHROME\\\";\"; LINE_CONTENT=\"@import \\\"$CSS_CONTENT\\\";\"; find \"$HOME/.zen\" -mindepth 2 -maxdepth 2 -type d -name chrome -print0 | while IFS= read -r -d \"\" dir; do USER_CHROME=\"$dir/userChrome.css\"; USER_CONTENT=\"$dir/userContent.css\"; mkdir -p \"$dir\"; touch \"$USER_CHROME\" \"$USER_CONTENT\"; sed -i \"/zen-browser\\/zen-userChrome\\.css/d\" \"$USER_CHROME\"; sed -i \"/zen-browser\\/zen-userContent\\.css/d\" \"$USER_CONTENT\"; if ! grep -Fq \"$LINE_CHROME\" \"$USER_CHROME\"; then printf \"%s\\n\" \"$LINE_CHROME\" >> \"$USER_CHROME\"; fi; if ! grep -Fq \"$LINE_CONTENT\" \"$USER_CONTENT\"; then printf \"%s\\n\" \"$LINE_CONTENT\" >> \"$USER_CONTENT\"; fi; done'"
+                     => "sh -c 'CSS_CHROME=\"$HOME/.cache/noctalia/zen-browser/zen-userChrome.css\"; CSS_CONTENT=\"$HOME/.cache/noctalia/zen-browser/zen-userContent.css\"; LINE_CHROME=\"@import \\\"$CSS_CHROME\\\";\"; LINE_CONTENT=\"@import \\\"$CSS_CONTENT\\\";\"; find \"$HOME/.config/zen\" \"$HOME/.zen\" -mindepth 2 -maxdepth 2 -type d -name chrome -print0 2>/dev/null | while IFS= read -r -d \"\" dir; do USER_CHROME=\"$dir/userChrome.css\"; USER_CONTENT=\"$dir/userContent.css\"; mkdir -p \"$dir\"; touch \"$USER_CHROME\" \"$USER_CONTENT\"; sed -i \"/zen-browser\\/zen-userChrome\\.css/d\" \"$USER_CHROME\"; sed -i \"/zen-browser\\/zen-userContent\\.css/d\" \"$USER_CONTENT\"; if ! grep -Fq \"$LINE_CHROME\" \"$USER_CHROME\"; then printf \"%s\\n\" \"$LINE_CHROME\" >> \"$USER_CHROME\"; fi; if ! grep -Fq \"$LINE_CONTENT\" \"$USER_CONTENT\"; then printf \"%s\\n\" \"$LINE_CONTENT\" >> \"$USER_CONTENT\"; fi; done'"
     },
     {
       "id": "cava",
@@ -294,7 +325,20 @@ Singleton {
       "id": "emacs",
       "name": "Emacs",
       "category": "editor",
-      "input": "emacs.el"
+      "input": "emacs.el",
+      "postProcess": () => `emacsclient -e "(load-theme 'noctalia t)"`
+    },
+    {
+      "id": "labwc",
+      "name": "Labwc",
+      "category": "compositor",
+      "input": "labwc.conf",
+      "outputs": [
+        {
+          "path": "~/.config/labwc/themerc-override"
+        }
+      ],
+      "postProcess": () => `${templateApplyScript} labwc`
     },
     {
       "id": "niri",
@@ -307,6 +351,30 @@ Singleton {
         }
       ],
       "postProcess": () => `${templateApplyScript} niri`
+    },
+    {
+      "id": "sway",
+      "name": "Sway",
+      "category": "compositor",
+      "input": "sway",
+      "outputs": [
+        {
+          "path": "~/.config/sway/noctalia"
+        }
+      ],
+      "postProcess": () => `${templateApplyScript} sway`
+    },
+    {
+      "id": "scroll",
+      "name": "Scroll",
+      "category": "compositor",
+      "input": "scroll",
+      "outputs": [
+        {
+          "path": "~/.config/scroll/noctalia"
+        }
+      ],
+      "postProcess": () => `${templateApplyScript} scroll`
     },
     {
       "id": "hyprland",
@@ -366,6 +434,17 @@ Singleton {
         }
       ],
       "postProcess": () => `${templateApplyScript} zathura`
+    },
+    {
+      "id": "steam",
+      "name": "Steam",
+      "category": "misc",
+      "input": "steam.css",
+      "outputs": [
+        {
+          "path": "~/.steam/steam/steamui/skins/Material-Theme/css/main/colors/matugen.css"
+        }
+      ]
     }
   ]
 
@@ -383,6 +462,15 @@ Singleton {
                                  });
     }
     return clients;
+  }
+
+  // Get resolved theme paths for a code client (returns array of all matching paths)
+  function resolvedCodeClientPaths(clientName) {
+    if (clientName === "code")
+      return resolvedCodePaths;
+    if (clientName === "codium")
+      return resolvedCodiumPaths;
+    return [];
   }
 
   // Extract Code clients for ProgramCheckerService compatibility
@@ -404,13 +492,47 @@ Singleton {
                                 clients.push({
                                                "name": client.name,
                                                "configPath": baseConfigDir,
-                                               "themePath": themePath
+                                               "themePath": "" // resolved dynamically via resolvedCodeClientPaths()
                                              });
                               });
     }
     return clients;
   }
 
+  // Resolve VSCode extension paths dynamically
+  Process {
+    id: codeResolverProcess
+    command: ["python3", vscodeHelperScript, "~/.vscode/extensions"]
+    running: true
+    property var paths: []
+    stdout: SplitParser {
+      onRead: data => {
+        var line = data.trim();
+        if (line)
+        codeResolverProcess.paths.push(line);
+      }
+    }
+    onExited: {
+      root.resolvedCodePaths = paths;
+    }
+  }
+
+  Process {
+    id: codiumResolverProcess
+    command: ["python3", vscodeHelperScript, "~/.vscode-oss/extensions"]
+    running: true
+    property var paths: []
+    stdout: SplitParser {
+      onRead: data => {
+        var line = data.trim();
+        if (line)
+        codiumResolverProcess.paths.push(line);
+      }
+    }
+    onExited: {
+      root.resolvedCodiumPaths = paths;
+    }
+  }
   // Build user templates TOML content
   function buildUserTemplatesToml() {
     var lines = [];
@@ -440,7 +562,7 @@ Singleton {
     var userConfigPath = Settings.configDir + "user-templates.toml";
 
     // Check if file already exists
-    fileCheckProcess.command = ["test", "-f", userConfigPath];
+    fileCheckProcess.command = ["test", "-s", userConfigPath];
     fileCheckProcess.running = true;
   }
 
@@ -448,17 +570,14 @@ Singleton {
     var userConfigPath = Settings.configDir + "user-templates.toml";
     var configContent = buildUserTemplatesToml();
     var userConfigPathEsc = userConfigPath.replace(/'/g, "'\\''");
+    var configDirEsc = Settings.configDir.replace(/'/g, "'\\''");
 
-    // Ensure directory exists (should already exist but just in case)
-    Quickshell.execDetached(["mkdir", "-p", Settings.configDir]);
-
-    // Write the config file using heredoc to avoid escaping issues
-    var script = `cat > '${userConfigPathEsc}' << 'EOF'\n`;
+    // Combine mkdir and write in a single script to avoid race condition
+    var script = `mkdir -p '${configDirEsc}' && cat > '${userConfigPathEsc}' << 'EOF'\n`;
     script += configContent;
     script += "EOF\n";
-    Quickshell.execDetached(["sh", "-c", script]);
-
-    Logger.d("TemplateRegistry", "User templates config written to:", userConfigPath);
+    fileWriteProcess.command = ["sh", "-c", script];
+    fileWriteProcess.running = true;
   }
 
   // Extract Emacs clients for ProgramCheckerService compatibility
@@ -477,18 +596,32 @@ Singleton {
     }
   ]
 
-  // Process for checking if user templates file exists
+  // Process for checking if user templates file exists and is non-empty
   Process {
     id: fileCheckProcess
     running: false
 
     onExited: function (exitCode) {
       if (exitCode === 0) {
-        // File exists, skip creation
+        // File exists and is non-empty, skip creation
         Logger.d("TemplateRegistry", "User templates config already exists, skipping creation");
       } else {
-        // File doesn't exist, create it
+        // File doesn't exist or is empty, create it
         doWriteUserTemplatesToml();
+      }
+    }
+  }
+
+  // Process for writing user templates file with error reporting
+  Process {
+    id: fileWriteProcess
+    running: false
+
+    onExited: function (exitCode) {
+      if (exitCode === 0) {
+        Logger.d("TemplateRegistry", "User templates config written to:", Settings.configDir + "user-templates.toml");
+      } else {
+        Logger.e("TemplateRegistry", "Failed to write user templates config (exit code:", exitCode + ")");
       }
     }
   }

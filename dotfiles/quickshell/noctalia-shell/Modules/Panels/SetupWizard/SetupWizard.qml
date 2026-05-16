@@ -254,13 +254,13 @@ SmartPanel {
                 Rectangle {
                   Layout.fillWidth: true
                   Layout.topMargin: Style.marginL
-                  Layout.preferredHeight: childrenRect.height + Style.marginXL
+                  Layout.preferredHeight: childrenRect.height + Style.margin2M
                   color: Color.mSurfaceVariant
                   radius: Style.radiusL
 
                   NText {
                     anchors.centerIn: parent
-                    width: parent.width - Style.marginL * 2
+                    width: parent.width - Style.margin2L
                     text: root.telemetryOnlyMode ? I18n.tr("setup.telemetry-wizard-note") : I18n.tr("setup.welcome-note")
                     pointSize: Style.fontSizeM
                     color: Color.mOnSurfaceVariant
@@ -347,23 +347,23 @@ SmartPanel {
             model: [
               {
                 "icon": "sparkles",
-                "label": "Welcome"
+                "label": I18n.tr("setup.welcome")
               },
               {
                 "icon": "image",
-                "label": "Wallpaper"
+                "label": I18n.tr("common.wallpaper")
               },
               {
                 "icon": "palette",
-                "label": "Appearance"
+                "label": I18n.tr("common.appearance")
               },
               {
                 "icon": "settings",
-                "label": "Customize"
+                "label": I18n.tr("common.customize")
               },
               {
                 "icon": "device-desktop",
-                "label": "Dock"
+                "label": I18n.tr("panels.dock.title")
               }
             ]
             delegate: RowLayout {
