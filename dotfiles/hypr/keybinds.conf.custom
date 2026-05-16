@@ -23,7 +23,7 @@ bind = $mainMod, M, exec, flatpak run com.spotify.Client
 bind = $mainMod, W, killactive,
 bind = $mainMod, T, fullscreen, 1
 bind = $mainMod SHIFT, T, togglefloating,
-bind = $mainMod, S, togglesplit,
+bind = $mainMod, S, layoutmsg, togglesplit
 bind = $mainMod, Q, exec, killall -SIGUSR1 waybar
 bind = $mainMod SHIFT, D, exec, pgrep -x nwg-dock-hyprland > /dev/null && pkill -x nwg-dock-hyprland || nwg-dock-hyprland -i 32 -x -f -c "rofi -show drun" -o DP-2 & 
 
