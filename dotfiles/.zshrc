@@ -48,3 +48,5 @@ alias grep='grep --color=auto'
 
 eval "$(starship init zsh)"
 export PATH="$HOME/bin:$HOME/.local/bin:$HOME/.cargo/bin:$PATH"
+export PATH="$HOME/bin:$PATH"
+export PATH=~/.npm-global/bin:$PATH

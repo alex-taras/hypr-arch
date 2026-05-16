@@ -87,6 +87,25 @@ else
     log "No bin directory found, skipping"
 fi
 
+log "Deploying .zshrc..."
+if [ -f ./dotfiles/.zshrc ]; then
+    if [ -f ~/.zshrc ]; then
+        src_ts=$(stat -c %Y ./dotfiles/.zshrc)
+        dst_ts=$(stat -c %Y ~/.zshrc)
+        if [ "$dst_ts" -gt "$src_ts" ]; then
+            log "  SKIPPED (live ~/.zshrc is newer — run backup before redeploying)"
+        else
+            cp ./dotfiles/.zshrc ~/.zshrc
+            log ".zshrc deployed to ~/"
+        fi
+    else
+        cp ./dotfiles/.zshrc ~/.zshrc
+        log ".zshrc deployed to ~/"
+    fi
+else
+    log "No .zshrc in dotfiles, skipping"
+fi
+
 log "Adding ~/bin to PATH in .zshrc..."
 if ! grep -q 'export PATH="$HOME/bin:$PATH"' ~/.zshrc 2>/dev/null; then
     echo 'export PATH="$HOME/bin:$PATH"' >> ~/.zshrc
