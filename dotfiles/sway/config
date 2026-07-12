@@ -11,7 +11,7 @@ include ~/.config/sway/noctalia
 ###################
 set $mod Mod4
 set $terminal kitty
-set $fileManager thunar
+set $fileManager dolphin
 set $menu qs -c noctalia-shell ipc call launcher toggle
 set $browser firefox https://www.google.com
 set $browserIncognito firefox --private-window https://www.google.com
@@ -20,14 +20,14 @@ set $logoutMenu qs -c noctalia-shell ipc call sessionMenu toggle
 ################
 ### MONITORS ###
 ################
-output DP-3     resolution 2560x1440@143.97Hz position 1952,0
-output HDMI-A-1 resolution 1920x1080@60Hz     position 32,0
+output DP-2     resolution 2560x1440@143.97Hz position 1952,0
+output HDMI-A-2 resolution 1920x1080@60Hz     position 32,0
 
-workspace 1 output DP-3
-workspace 2 output HDMI-A-1
-workspace 3 output DP-3
-workspace 4 output HDMI-A-1
-workspace 5 output HDMI-A-1
+workspace 1 output DP-2
+workspace 2 output HDMI-A-2
+workspace 3 output DP-2
+workspace 4 output HDMI-A-2
+workspace 5 output HDMI-A-2
 
 #############################
 ### ENVIRONMENT VARIABLES ###
@@ -46,6 +46,7 @@ exec_always sh -c '\
 ### AUTOSTART ###
 ################
 exec solaar --window=hide
+exec /usr/lib/xdg-desktop-portal --replace
 exec ydotoold
 exec swayidle -w \
     timeout 300  'qs -c noctalia-shell ipc call lockScreen lock' \
@@ -73,7 +74,6 @@ corner_radius 5
 blur enable
 blur_passes 3
 blur_radius 5
-
 
 # Global opacity (hyprland had 0.8 active / 0.7 inactive; sway has no native active/inactive split)
 for_window [app_id=".*"] opacity 0.95
@@ -120,8 +120,9 @@ for_window [app_id="floating-large"]  resize set 1600 900
 for_window [app_id="floating-large"]  move position center
 
 # Polkit
-for_window [app_id="xfce-polkit"] floating enable
-for_window [app_id="xfce-polkit"] move position center
+exec /usr/lib/polkit-gnome/polkit-gnome-authentication-agent-1
+for_window [app_id="polkit-gnome-authentication-agent-1"] floating enable
+for_window [app_id="polkit-gnome-authentication-agent-1"] move position center
 
 # LibreWolf/Firefox save dialogs — force tiled
 for_window [app_id="librewolf" title=".*(Enter name of file to save to|Save Image).*"] floating disable

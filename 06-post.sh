@@ -40,6 +40,8 @@ log "Deploying dotfiles..."
 if [ -d ./dotfiles ]; then
     STALE=0
     SKIPPED=0
+    BACKED_UP=0
+    BACKUP_DIR=""
     while IFS= read -r src; do
         rel="${src#./dotfiles/}"
         dst="$HOME/.config/$rel"
@@ -52,6 +54,14 @@ if [ -d ./dotfiles ]; then
                 STALE=1
                 continue
             fi
+            # Back up live file before overwriting
+            if [ -z "$BACKUP_DIR" ]; then
+                BACKUP_DIR="$HOME/.config-backup-$(date +%Y%m%d-%H%M%S)"
+                mkdir -p "$BACKUP_DIR"
+            fi
+            mkdir -p "$BACKUP_DIR/$(dirname "$rel")"
+            cp "$dst" "$BACKUP_DIR/$rel"
+            BACKED_UP=$((BACKED_UP + 1))
         fi
         mkdir -p "$(dirname "$dst")"
         cp "$src" "$dst"
@@ -59,6 +69,7 @@ if [ -d ./dotfiles ]; then
     if [ "$STALE" -eq 1 ]; then
         log "WARNING: Some dotfiles in this repo are OUT OF DATE — run backup before redeploying"
     fi
+    [ -n "$BACKUP_DIR" ] && log "Backed up $BACKED_UP live file(s) to $BACKUP_DIR"
     log "Dotfiles deployed to ~/.config/ ($SKIPPED file(s) skipped — live was newer)"
 else
     log "No dotfiles directory found, skipping"

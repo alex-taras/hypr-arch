@@ -77,4 +77,14 @@ gsettings set org.gnome.desktop.interface color-scheme 'prefer-dark'
 gsettings set org.gnome.desktop.interface gtk-theme 'adw-gtk3-dark'
 gsettings set org.gnome.desktop.interface icon-theme 'Nordzy-dark'
 
+log "Aligning user GTK settings.ini icon theme (gsettings is overridden by these files)..."
+for f in ~/.config/gtk-3.0/settings.ini ~/.config/gtk-4.0/settings.ini; do
+    [ -f "$f" ] || continue
+    if grep -q '^gtk-icon-theme-name=' "$f"; then
+        sed -i 's/^gtk-icon-theme-name=.*/gtk-icon-theme-name=Nordzy-dark/' "$f"
+    else
+        sed -i '/^\[Settings\]/a gtk-icon-theme-name=Nordzy-dark' "$f"
+    fi
+done
+
 log "Sway and Noctalia setup complete!"
