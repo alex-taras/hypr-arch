@@ -135,6 +135,12 @@ for_window [class="galaxyclient.exe"]      floating disable
 for_window [class="epicgameslauncher.exe"] floating disable
 for_window [app_id="openttd"]              floating disable
 
+# Lutris file/select dialogs — force tiled
+for_window [app_id="net.lutris.Lutris" title=".*(Select file|Configure).*"] floating disable
+
+# Any "select/open file" dialog — tile always, any app
+for_window [title=".*(Select file|Open file|Open File|Choose file|Select folder|Select Folder|Choose folder|Choose Folder).*"] floating disable
+
 
 ###################
 ### KEYBINDINGS ###
